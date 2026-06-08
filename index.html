@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aebes DashGen — Gerador de Dashboards</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════
+     TELA 1 — UPLOAD
+═══════════════════════════════════════════════ -->
+<div id="upload-screen" class="screen active">
+  <div class="upload-hero">
+
+    <div class="logo">
+      <i class="fa-solid fa-chart-pie"></i>
+      <span>Aebes DashGen</span>
+    </div>
+
+    <h1>Planilha Excel → Dashboard em segundos</h1>
+    <p class="hero-sub">Envie seu arquivo, escolha os gráficos e apresente seus dados com estilo.</p>
+
+    <div class="upload-zone" id="upload-zone">
+      <input type="file" id="file-input" accept=".xlsx,.xls,.csv,.parquet" hidden />
+      <i class="fa-solid fa-file-excel upload-icon"></i>
+      <p class="upload-title">Arraste o arquivo aqui</p>
+      <p class="upload-sub">ou</p>
+      <button class="btn btn-primary" onclick="event.stopPropagation(); document.getElementById('file-input').click()">
+        <i class="fa-solid fa-upload"></i> Selecionar arquivo
+      </button>
+      <p class="upload-formats">Suporta .xlsx · .xls · .csv · .parquet</p>
+    </div>
+
+    <div class="hero-features">
+      <div class="hero-feature"><i class="fa-solid fa-chart-bar"></i><span>Gráficos automáticos</span></div>
+      <div class="hero-feature"><i class="fa-solid fa-gauge-high"></i><span>Cards de indicadores</span></div>
+      <div class="hero-feature"><i class="fa-solid fa-floppy-disk"></i><span>Salvar no navegador</span></div>
+      <div class="hero-feature"><i class="fa-solid fa-file-export"></i><span>Exportar PDF / PNG</span></div>
+    </div>
+
+    <div id="saved-section" class="saved-section" style="display:none">
+      <h3><i class="fa-solid fa-clock-rotate-left"></i> Dashboards salvos</h3>
+      <div id="saved-list" class="saved-list"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     TELA 2 — PRÉ-VISUALIZAÇÃO DOS DADOS
+═══════════════════════════════════════════════ -->
+<div id="preview-screen" class="screen">
+  <!-- Linha 1: ações fixas (sempre visível) -->
+  <div class="preview-header">
+    <button class="btn btn-ghost" onclick="App.goToUpload()">
+      <i class="fa-solid fa-arrow-left"></i> Voltar
+    </button>
+    <div class="file-info-badge">
+      <i class="fa-solid fa-file-excel text-green"></i>
+      <span id="file-name-display">arquivo.xlsx</span>
+    </div>
+    <span id="preview-stats" class="preview-stats"></span>
+    <div style="display:flex;gap:8px;margin-left:auto;">
+      <button class="btn btn-ghost" onclick="App.openColumnMappingModal()" title="Revisar e configurar tipos das colunas">
+        <i class="fa-solid fa-sliders"></i> Mapear colunas
+      </button>
+      <button class="btn btn-primary" onclick="App.goToDashboard()">
+        Criar Dashboard <i class="fa-solid fa-arrow-right"></i>
+      </button>
+    </div>
+  </div>
+  <!-- Linha 2: abas das sheets (scroll horizontal se necessário) -->
+  <div class="preview-tabs-bar">
+    <div id="sheet-tabs" class="sheet-tabs"></div>
+  </div>
+  <div id="large-file-summary" class="large-file-summary" hidden></div>
+  <div class="preview-body">
+    <div id="data-table-wrapper" class="table-wrapper"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     TELA 3 — EDITOR DE DASHBOARD
+═══════════════════════════════════════════════ -->
+<div id="dashboard-screen" class="screen">
+
+  <!-- Barra superior -->
+  <header class="dash-header">
+    <div class="dash-header-left">
+      <button class="btn btn-ghost icon-btn sidebar-toggle" onclick="App.toggleSidebar()" title="Alternar painel">
+        <i class="fa-solid fa-bars"></i>
+      </button>
+      <div class="logo-sm"><i class="fa-solid fa-chart-pie"></i><span>Aebes DashGen</span></div>
+      <input type="text" id="dash-title" class="dash-title-input" value="Meu Dashboard" spellcheck="false" />
+    </div>
+    <div class="dash-header-right">
+      <span id="dash-file-badge" class="file-info-badge sm"></span>
+      <button class="btn btn-ghost" onclick="App.goToPreview()" title="Visualizar dados">
+        <i class="fa-solid fa-table"></i> <span class="btn-label">Dados</span>
+      </button>
+      <button class="btn btn-ghost" onclick="App.goToUpload()" title="Trocar arquivo">
+        <i class="fa-solid fa-file-excel"></i> <span class="btn-label">Trocar</span>
+      </button>
+      <button id="btn-undo" class="btn btn-ghost icon-btn" onclick="Dashboard.undo()" title="Desfazer (Ctrl+Z)" disabled>
+        <i class="fa-solid fa-rotate-left"></i>
+      </button>
+      <button id="btn-redo" class="btn btn-ghost icon-btn" onclick="Dashboard.redo()" title="Refazer (Ctrl+Y)" disabled>
+        <i class="fa-solid fa-rotate-right"></i>
+      </button>
+      <button class="btn btn-ghost icon-btn" onclick="App.toggleFilterBar()" title="Filtro global">
+        <i class="fa-solid fa-filter"></i>
+      </button>
+      <button class="btn btn-ghost icon-btn" onclick="Dashboard.clearAll()" title="Limpar tudo">
+        <i class="fa-solid fa-trash-can"></i>
+      </button>
+      <button class="btn btn-secondary" onclick="App.saveDashboard()">
+        <i class="fa-solid fa-floppy-disk"></i> <span class="btn-label">Salvar</span>
+      </button>
+      <div class="dropdown" id="export-dropdown">
+        <button class="btn btn-primary" onclick="App.toggleExportMenu()">
+          <i class="fa-solid fa-file-export"></i> Exportar <i class="fa-solid fa-chevron-down fa-xs"></i>
+        </button>
+        <div class="dropdown-menu" id="export-menu">
+          <button onclick="Exporter.toPNG()"><i class="fa-solid fa-image"></i> Imagem PNG</button>
+          <button onclick="Exporter.toPDF()"><i class="fa-solid fa-file-pdf"></i> PDF <span class="badge-opt">+ senha</span></button>
+          <button onclick="Exporter.toHTML()"><i class="fa-solid fa-code"></i> HTML interativo <span class="badge-opt">+ senha</span></button>
+          <hr />
+          <button onclick="Exporter.toJSON()"><i class="fa-solid fa-file-export"></i> Exportar configuração</button>
+          <button onclick="Exporter.importJSON()"><i class="fa-solid fa-file-import"></i> Importar configuração</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Barra de filtro global (toggle) -->
+  <div class="filter-bar" id="filter-bar">
+    <div class="filter-bar-inner">
+      <span class="filter-bar-label"><i class="fa-solid fa-filter"></i> Filtro global</span>
+      <select id="filter-col" class="form-control" onchange="App.onFilterColChange()" style="width:150px;"></select>
+      <select id="filter-op" class="form-control" style="width:130px;">
+        <option value="contains">contém</option>
+        <option value="equals">igual a</option>
+        <option value="starts">começa com</option>
+        <option value="gt">maior que</option>
+        <option value="lt">menor que</option>
+      </select>
+      <input id="filter-value" type="text" class="form-control" placeholder="Valor do filtro…"
+             style="width:160px;" onkeydown="if(event.key==='Enter')App.applyFilter()" />
+      <button class="btn btn-primary" style="padding:6px 14px;" onclick="App.applyFilter()">
+        <i class="fa-solid fa-check"></i> Aplicar
+      </button>
+      <button class="btn btn-ghost" style="padding:6px 12px;" onclick="App.clearFilter()">
+        <i class="fa-solid fa-xmark"></i> Limpar
+      </button>
+      <span id="filter-count" class="filter-count"></span>
+    </div>
+  </div>
+
+  <div class="dash-body">
+
+    <!-- Painel lateral -->
+    <aside class="dash-sidebar" id="dash-sidebar">
+      <div class="sidebar-section">
+        <p class="sidebar-label">Adicionar widget</p>
+        <div class="widget-palette">
+          <button class="palette-btn" onclick="Dashboard.addWidget('bar')" title="Gráfico de Barras">
+            <i class="fa-solid fa-chart-bar"></i><span>Barras</span>
+          </button>
+          <button class="palette-btn" onclick="Dashboard.addWidget('line')" title="Gráfico de Linhas">
+            <i class="fa-solid fa-chart-line"></i><span>Linhas</span>
+          </button>
+          <button class="palette-btn" onclick="Dashboard.addWidget('area')" title="Gráfico de Área">
+            <i class="fa-solid fa-chart-area"></i><span>Área</span>
+          </button>
+          <button class="palette-btn" onclick="Dashboard.addWidget('pie')" title="Gráfico de Pizza">
+            <i class="fa-solid fa-chart-pie"></i><span>Pizza</span>
+          </button>
+          <button class="palette-btn" onclick="Dashboard.addWidget('doughnut')" title="Gráfico de Rosca">
+            <i class="fa-solid fa-circle-dot"></i><span>Rosca</span>
+          </button>
+          <button class="palette-btn" onclick="Dashboard.addWidget('scatter')" title="Dispersão">
+            <i class="fa-solid fa-circle-nodes"></i><span>Dispersão</span>
+          </button>
+          <button class="palette-btn" onclick="Dashboard.addWidget('kpi')" title="Card de Indicador">
+            <i class="fa-solid fa-gauge-high"></i><span>Indicador</span>
+          </button>
+          <button class="palette-btn" onclick="Dashboard.addWidget('table')" title="Tabela de dados">
+            <i class="fa-solid fa-table"></i><span>Tabela</span>
+          </button>
+          <button class="palette-btn" onclick="Dashboard.addWidget('text')" title="Texto e Markdown">
+            <i class="fa-solid fa-align-left"></i><span>Texto</span>
+          </button>
+        </div>
+        <button class="btn btn-primary auto-dashboard-btn" onclick="Dashboard.generateSuggestedDashboard()" title="Criar uma composição com base nos tipos das colunas">
+          <i class="fa-solid fa-wand-magic-sparkles"></i> Gerar dashboard sugerido
+        </button>
+      </div>
+
+      <div class="sidebar-section">
+        <p class="sidebar-label">Colunas detectadas</p>
+        <div id="columns-list" class="columns-list"></div>
+      </div>
+
+      <div class="sidebar-section">
+        <p class="sidebar-label">Paleta de cores</p>
+        <div id="theme-picker" class="theme-picker"></div>
+      </div>
+
+      <div class="sidebar-section">
+        <p class="sidebar-label">Fundo do canvas</p>
+        <div class="bg-picker" id="bg-picker"></div>
+      </div>
+    </aside>
+
+    <!-- Canvas do dashboard -->
+    <main class="dash-canvas" id="dash-canvas">
+      <!-- Indicador de filtro cruzado -->
+      <div class="cross-filter-bar" id="cross-filter-bar" style="display:none">
+        <i class="fa-solid fa-filter"></i>
+        Filtro cruzado ativo:&nbsp;<strong id="cross-filter-label"></strong>
+        <button onclick="App.clearCrossFilter()" title="Remover filtro cruzado">
+          <i class="fa-solid fa-xmark"></i> Limpar
+        </button>
+      </div>
+      <div class="canvas-empty" id="canvas-empty">
+        <i class="fa-solid fa-wand-magic-sparkles"></i>
+        <p>Clique em um widget no painel à esquerda para começar</p>
+      </div>
+      <div class="canvas-interaction-hint"><i class="fa-solid fa-grip-vertical"></i> Arraste pelo cabeçalho para organizar · use o canto inferior para ajustar a largura</div>
+      <div class="widgets-grid" id="widgets-grid"></div>
+    </main>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     MODAL — EDITOR DE WIDGET
+═══════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal" id="widget-modal">
+    <div class="modal-header">
+      <div class="modal-header-left">
+        <span id="modal-type-icon" class="modal-type-icon"></span>
+        <h2 id="modal-title">Configurar Widget</h2>
+      </div>
+      <button class="modal-close" onclick="App.closeModal()"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="App.closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="Dashboard.saveWidget()">
+        <i class="fa-solid fa-check"></i> Aplicar
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     MODAL — SENHA DE EXPORTAÇÃO
+═══════════════════════════════════════════════ -->
+<div class="pwd-overlay" id="pwd-overlay">
+  <div class="pwd-modal">
+    <div class="pwd-icon"><i class="fa-solid fa-lock"></i></div>
+    <h3 id="pwd-title">Proteger com senha</h3>
+    <p id="pwd-desc">Opcional — deixe em branco para exportar sem proteção.</p>
+    <div id="pwd-notice" class="pwd-notice" style="display:none"></div>
+    <div class="pwd-input-wrap">
+      <input type="password" id="pwd-input" class="form-control" placeholder="Digite uma senha (opcional)" autocomplete="new-password" />
+      <button class="pwd-eye" id="pwd-eye" type="button" title="Mostrar/ocultar senha">
+        <i class="fa-solid fa-eye"></i>
+      </button>
+    </div>
+    <div class="pwd-actions">
+      <button class="btn btn-ghost" id="pwd-cancel">Cancelar</button>
+      <button class="btn btn-primary" id="pwd-confirm">
+        <i class="fa-solid fa-file-export"></i> Exportar
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     LOADING OVERLAY
+═══════════════════════════════════════════════ -->
+<div id="loading-overlay" class="loading-overlay" role="dialog" aria-modal="true" aria-labelledby="loading-title">
+  <div class="loading-box">
+    <div class="loading-heading">
+      <div class="loading-spinner"></div>
+      <div>
+        <h2 id="loading-title">Preparando seus dados</h2>
+        <p id="loading-file"></p>
+      </div>
+    </div>
+    <div class="loading-progress-track" aria-hidden="true"><div id="loading-progress" class="loading-progress-fill"></div></div>
+    <div class="loading-status-row">
+      <p id="loading-msg">Processando arquivo…</p>
+      <span id="loading-percent">0%</span>
+    </div>
+    <div class="loading-steps" id="loading-steps">
+      <span data-step="read">Leitura</span><span data-step="parse">Estrutura</span><span data-step="prepare">Preparação</span><span data-step="finish">Prévia</span>
+    </div>
+    <p id="loading-tip" class="loading-tip">Arquivos grandes podem levar alguns minutos. A aba pode continuar responsiva durante o processamento.</p>
+    <div class="loading-footer">
+      <span id="loading-elapsed">0 s decorridos</span>
+      <button id="loading-cancel" class="btn btn-ghost" onclick="App.cancelImport()"><i class="fa-solid fa-xmark"></i> Cancelar importação</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     COLMAP — MAPEAMENTO DE COLUNAS
+═══════════════════════════════════════════════ -->
+<div class="colmap-overlay" id="colmap-overlay">
+  <div class="colmap-modal">
+    <div class="colmap-header">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <i class="fa-solid fa-sliders" style="color:var(--c-primary);font-size:18px;"></i>
+        <div>
+          <div style="font-weight:700;font-size:16px;">Configurar colunas</div>
+          <div style="font-size:12px;color:var(--c-text-2);">Revise os tipos antes de criar o dashboard</div>
+        </div>
+      </div>
+      <button class="modal-close" onclick="App.closeColumnMappingModal()">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+    <div class="colmap-body" id="colmap-body"></div>
+    <div class="colmap-footer">
+      <button class="btn btn-ghost" onclick="App.closeColumnMappingModal()">
+        <i class="fa-solid fa-arrow-left"></i> Voltar
+      </button>
+      <button class="btn btn-primary" onclick="App.confirmColumnMapping()">
+        <i class="fa-solid fa-check"></i> Confirmar mapeamento
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     TOAST
+═══════════════════════════════════════════════ -->
+<div id="toast" class="toast"></div>
+
+<!-- CDNs -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" crossorigin="anonymous"></script>
+
+<!-- App Scripts -->
+<script src="js/excel.js"></script>
+<script src="js/data-engine.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/markdown.js"></script>
+<script src="js/dashboard.js"></script>
+<script src="js/exporter.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>
