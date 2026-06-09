@@ -1147,7 +1147,7 @@ const Dashboard = (() => {
 
     const sizeOpts = (cur) => ['sm','md','lg','full'].map((s, i) => {
       const labels = { sm: '¼ Pequeno', md: '½ Médio', lg: '¾ Grande', full: 'Completo' };
-      return `<input type="radio" class="size-opt" name="w-size" id="sz${i}" value="${s}" ${cur===s?'checked':''}>
+      return `<input type="radio" class="size-opt" name="w-size" id="sz${i}" value="${s}" ${cur===s?'checked':''} onchange="Dashboard.syncModalSizePreset('${s}')">
         <label class="size-opt-label" for="sz${i}">${labels[s]}</label>`;
     }).join('');
 
@@ -1194,6 +1194,18 @@ const Dashboard = (() => {
           <div class="form-group full">
             <label class="form-label">Tamanho</label>
             <div class="size-picker">${sizeOpts(w.size)}</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Largura exata <em>(px)</em></label>
+            <input id="w-width-px" class="form-control" type="number"
+              min="${MIN_WIDGET_WIDTH}" step="1"
+              value="${Math.round(w.layout?.width ?? widthForSize(w.size))}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Altura exata <em>(px)</em></label>
+            <input id="w-height-px" class="form-control" type="number"
+              min="${minHeightForWidget(w)}" max="${MAX_WIDGET_HEIGHT}" step="1"
+              value="${Math.round(w.layout?.height ?? estimatedWidgetHeight(w))}">
           </div>
         </div>
       </div>
@@ -1573,6 +1585,12 @@ const Dashboard = (() => {
     if (urlGroup) urlGroup.style.display = type === 'external' ? '' : 'none';
   }
 
+  function syncModalSizePreset(size) {
+    const widthInput = document.getElementById('w-width-px');
+    if (!widthInput) return;
+    widthInput.value = Math.round(widthForSize(size));
+  }
+
   /* ── Salvar widget (vindo do modal) ─────── */
   async function saveWidget() {
     const w = widgets.find(x => x.id === editingId);
@@ -1582,6 +1600,8 @@ const Dashboard = (() => {
     w.config.titleIcon = document.querySelector('input[name="w-title-icon"]:checked')?.value ?? 'auto';
     const previousSize = w.size;
     w.size = document.querySelector('input[name="w-size"]:checked')?.value ?? w.size;
+    const requestedWidth = parseInt(document.getElementById('w-width-px')?.value ?? '');
+    const requestedHeight = parseInt(document.getElementById('w-height-px')?.value ?? '');
 
     if (w.type === 'text') {
       w.config.content = document.getElementById('w-text-content')?.value ?? '';
@@ -1678,12 +1698,27 @@ const Dashboard = (() => {
     // Atualiza tamanho no DOM
     const el = document.querySelector(`[data-id="${w.id}"]`);
     if (el) {
-      if (w.size !== previousSize) {
-        const gridWidth = getGridWidth();
-        w.layout.width = widthForSize(w.size, gridWidth);
-        w.layout.x = clamp(w.layout.x, 0, Math.max(0, gridWidth - w.layout.width));
-        applyWidgetLayout(w, el);
-      }
+      const gridWidth = getGridWidth();
+      w.layout ??= {
+        x: 0,
+        y: 0,
+        width: widthForSize(w.size, gridWidth),
+        height: estimatedWidgetHeight(w),
+      };
+      const fallbackWidth = w.size !== previousSize ? widthForSize(w.size, gridWidth) : w.layout.width;
+      w.layout.width = clamp(
+        Number.isFinite(requestedWidth) ? requestedWidth : fallbackWidth,
+        Math.min(MIN_WIDGET_WIDTH, gridWidth),
+        Math.max(Math.min(MIN_WIDGET_WIDTH, gridWidth), gridWidth - w.layout.x)
+      );
+      w.layout.height = clamp(
+        Number.isFinite(requestedHeight) ? requestedHeight : w.layout.height,
+        minHeightForWidget(w),
+        MAX_WIDGET_HEIGHT
+      );
+      w.layout.x = clamp(w.layout.x, 0, Math.max(0, gridWidth - w.layout.width));
+      syncSizeFromWidth(w);
+      applyWidgetLayout(w, el);
       updateSizeButton(w, el);
       el.querySelector('.widget-title').innerHTML = widgetTitleHTML(w);
     }
@@ -1955,7 +1990,7 @@ const Dashboard = (() => {
     serialize, load, getWidgets, generateSuggestedDashboard,
     updatePlaceholder,
     addPage, switchPage, switchPageById, openPageModal, closePageModal, savePageSettings, deletePage,
-    toggleButtonDestinationFields,
+    toggleButtonDestinationFields, syncModalSizePreset,
     undo, redo, resetHistory,
   };
 })();
