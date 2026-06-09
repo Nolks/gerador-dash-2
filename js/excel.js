@@ -213,6 +213,104 @@ const ExcelParser = (() => {
     return rows;
   }
 
+  function tokenizeFormula(formula) {
+    const source = String(formula ?? '').trim().replace(/^=/, '');
+    if (!source) throw new Error('Informe uma fórmula.');
+    const tokens = [];
+    let index = 0;
+    while (index < source.length) {
+      const rest = source.slice(index);
+      const whitespace = rest.match(/^\s+/);
+      if (whitespace) { index += whitespace[0].length; continue; }
+      if (source[index] === '[') {
+        const end = source.indexOf(']', index + 1);
+        if (end < 0) throw new Error('Feche o nome da coluna com ].');
+        const value = source.slice(index + 1, end).trim();
+        if (!value) throw new Error('Nome de coluna vazio.');
+        tokens.push({ type: 'column', value });
+        index = end + 1;
+        continue;
+      }
+      const number = rest.match(/^(?:\d+(?:[.,]\d*)?|[.,]\d+)/);
+      if (number) {
+        tokens.push({ type: 'number', value: Number(number[0].replace(',', '.')) });
+        index += number[0].length;
+        continue;
+      }
+      const char = source[index];
+      if ('+-*/'.includes(char)) tokens.push({ type: 'operator', value: char });
+      else if ('()'.includes(char)) tokens.push({ type: 'paren', value: char });
+      else throw new Error(`Caractere não permitido na fórmula: ${char}`);
+      index++;
+    }
+    return tokens;
+  }
+
+  function formulaColumns(formula) {
+    return [...new Set(tokenizeFormula(formula)
+      .filter(token => token.type === 'column')
+      .map(token => token.value))];
+  }
+
+  function validateFormula(formula, availableColumns = []) {
+    const tokens = tokenizeFormula(formula);
+    const available = new Set(availableColumns);
+    const missing = tokens
+      .filter(token => token.type === 'column' && !available.has(token.value))
+      .map(token => token.value);
+    if (missing.length) throw new Error(`Coluna não encontrada: ${[...new Set(missing)].join(', ')}`);
+    evaluateFormulaTokens(tokens, Object.fromEntries(availableColumns.map(column => [column, 1])));
+    return tokens;
+  }
+
+  function evaluateFormulaTokens(tokens, row) {
+    let position = 0;
+    const parseExpression = () => {
+      let value = parseTerm();
+      while (tokens[position]?.type === 'operator' && ['+', '-'].includes(tokens[position].value)) {
+        const operator = tokens[position++].value;
+        const right = parseTerm();
+        value = operator === '+' ? value + right : value - right;
+      }
+      return value;
+    };
+    const parseTerm = () => {
+      let value = parseFactor();
+      while (tokens[position]?.type === 'operator' && ['*', '/'].includes(tokens[position].value)) {
+        const operator = tokens[position++].value;
+        const right = parseFactor();
+        value = operator === '*' ? value * right : right === 0 ? NaN : value / right;
+      }
+      return value;
+    };
+    const parseFactor = () => {
+      const token = tokens[position++];
+      if (!token) throw new Error('Fórmula incompleta.');
+      if (token.type === 'operator' && ['+', '-'].includes(token.value)) {
+        const value = parseFactor();
+        return token.value === '-' ? -value : value;
+      }
+      if (token.type === 'number') return token.value;
+      if (token.type === 'column') return parseNumericValue(row[token.value]) ?? 0;
+      if (token.type === 'paren' && token.value === '(') {
+        const value = parseExpression();
+        if (tokens[position]?.type !== 'paren' || tokens[position].value !== ')') {
+          throw new Error('Parênteses não fechados.');
+        }
+        position++;
+        return value;
+      }
+      throw new Error('Expressão inválida.');
+    };
+    const result = parseExpression();
+    if (position !== tokens.length) throw new Error('Expressão inválida.');
+    return Number.isFinite(result) ? result : null;
+  }
+
+  function evaluateFormula(formula, row) {
+    return evaluateFormulaTokens(tokenizeFormula(formula), row);
+  }
+
   function isDateLike(v) {
     return parseDateValue(v) !== null;
   }
@@ -244,6 +342,7 @@ const ExcelParser = (() => {
   return {
     readFile, sanitize, normalizeHeaders, detectTypes,
     normalizeNumericValue, parseNumericValue, parseDateValue, hasBRFormatting, preprocessRows,
+    tokenizeFormula, formulaColumns, validateFormula, evaluateFormula,
     numericColumns, stringColumns, fmtNumber,
   };
 })();

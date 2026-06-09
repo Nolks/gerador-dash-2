@@ -24,6 +24,7 @@ const App = (() => {
     activeFilter:   null,   // { col, op, value }
     widgetFilters:  {},     // widgetId -> { coluna: valor }
     crossFilter:    null,   // { col, value }
+    calculatedFields: [],
   };
 
   let memoryDataVersion = 0;
@@ -43,8 +44,13 @@ const App = (() => {
   function getActiveFilters() {
     const filters = state.activeFilter ? [state.activeFilter] : [];
     Object.values(state.widgetFilters).forEach(group => {
-      Object.entries(group ?? {}).forEach(([col, value]) => {
-        if (String(value ?? '').trim() !== '') filters.push({ col, op: 'equals', value });
+      Object.entries(group ?? {}).forEach(([col, filter]) => {
+        if (filter && typeof filter === 'object' && filter.op) {
+          if (filter.op === 'in' && filter.values?.length) filters.push({ col, ...filter });
+          if (filter.op === 'between' && (filter.from || filter.to)) filters.push({ col, ...filter });
+        } else if (String(filter ?? '').trim() !== '') {
+          filters.push({ col, op: 'equals', value: filter });
+        }
       });
     });
     return filters;
@@ -62,7 +68,13 @@ const App = (() => {
       if (!e.target.closest('#export-dropdown')) closeExportMenu();
     });
     document.addEventListener('keydown', e => {
-      if (e.key === 'Escape') { closeModal(); closeColumnMappingModal(); Dashboard.closePageModal(); }
+      if (e.key === 'Escape') {
+        closeModal();
+        closeColumnMappingModal();
+        closeCalculatedFieldModal();
+        Dashboard.closePageModal();
+        Dashboard.stopPresentation?.();
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); Dashboard.undo(); }
       if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) { e.preventDefault(); Dashboard.redo(); }
     });
@@ -229,6 +241,7 @@ const App = (() => {
     activeImport = token;
     const importStartedAt = token.startedAt;
     state.fileSize = file.size;
+    state.calculatedFields = [];
     const isAnalytic = /\.(csv|parquet)$/i.test(file.name);
     const tip = isAnalytic
       ? 'Modo analítico: o arquivo será consultado sem criar milhões de objetos na interface.'
@@ -336,14 +349,71 @@ const App = (() => {
     const finalCols  = Object.keys(state.columnTypes).filter(c => !excluded.has(c));
     const finalTypes = {};
     finalCols.forEach(c => { finalTypes[c] = state.columnConfig[c] ?? state.columnTypes[c] ?? 'string'; });
-    state.columns        = finalCols;
+    const calculatedFields = state.calculatedFields.filter(field =>
+      field.name && !finalCols.includes(field.name)
+    );
+    calculatedFields.forEach(field => {
+      finalTypes[field.name] = 'number';
+      state.columnConfig[field.name] = 'number';
+    });
+    state.columns        = [...finalCols, ...calculatedFields.map(field => field.name)];
     state.numericColumns = ExcelParser.numericColumns(finalTypes);
     state.stringColumns  = ExcelParser.stringColumns(finalTypes);
     if (state.dataMode === 'query') {
-      await DataEngine.rebuildView(state.columnConfig);
+      await DataEngine.rebuildView(state.columnConfig, calculatedFields);
     } else {
       state.rows = ExcelParser.preprocessRows(state.rawRows, state.columnConfig);
+      state.rows.forEach(row => calculatedFields.forEach(field => {
+        row[field.name] = ExcelParser.evaluateFormula(field.formula, row);
+      }));
       invalidateMemoryCache();
+    }
+  }
+
+  function rowMatchesFilter(row, filter) {
+    if (!filter?.col) return true;
+    const raw = row[filter.col];
+    const type = state.columnConfig[filter.col] ?? state.columnTypes[filter.col];
+    if (filter.op === 'in') {
+      const values = filter.values ?? [];
+      if (!values.length) return true;
+      if (type === 'number') {
+        const current = ExcelParser.parseNumericValue(raw);
+        return values.some(value => ExcelParser.parseNumericValue(value) === current);
+      }
+      return values.some(value => String(value).trim() === String(raw ?? '').trim());
+    }
+    if (filter.op === 'between') {
+      if (type === 'date') {
+        const current = ExcelParser.parseDateValue(raw);
+        const from = ExcelParser.parseDateValue(filter.from);
+        const to = ExcelParser.parseDateValue(filter.to);
+        return current !== null && (!from || current >= from) && (!to || current <= to);
+      }
+      const current = ExcelParser.parseNumericValue(raw);
+      const from = ExcelParser.parseNumericValue(filter.from);
+      const to = ExcelParser.parseNumericValue(filter.to);
+      return current !== null && (from === null || current >= from) && (to === null || current <= to);
+    }
+    const value = String(filter.value ?? '').trim();
+    if (!value) return true;
+    const text = String(raw ?? '').toLowerCase().trim();
+    const expected = value.toLowerCase();
+    const numeric = ExcelParser.parseNumericValue(raw);
+    const expectedNumeric = ExcelParser.parseNumericValue(value);
+    const date = type === 'date' ? ExcelParser.parseDateValue(raw) : null;
+    const expectedDate = type === 'date' ? ExcelParser.parseDateValue(value) : null;
+    switch (filter.op) {
+      case 'contains': return text.includes(expected);
+      case 'starts': return text.startsWith(expected);
+      case 'equals':
+        if (expectedDate) return date !== null && date.getTime() === expectedDate.getTime();
+        return type === 'number' && expectedNumeric !== null ? numeric === expectedNumeric : text === expected;
+      case 'gt': return expectedDate ? date > expectedDate : numeric !== null && expectedNumeric !== null && numeric > expectedNumeric;
+      case 'gte': return expectedDate ? date >= expectedDate : numeric !== null && expectedNumeric !== null && numeric >= expectedNumeric;
+      case 'lt': return expectedDate ? date < expectedDate : numeric !== null && expectedNumeric !== null && numeric < expectedNumeric;
+      case 'lte': return expectedDate ? date <= expectedDate : numeric !== null && expectedNumeric !== null && numeric <= expectedNumeric;
+      default: return true;
     }
   }
 
@@ -357,59 +427,15 @@ const App = (() => {
     let rows = state.rows;
 
     // Filtro global
-    const f = state.activeFilter;
-    if (f && f.col && String(f.value ?? '').trim() !== '') {
-      const fVal = String(f.value).toLowerCase().trim();
-      const numericFilter = ExcelParser.parseNumericValue(f.value);
-      const isNumeric = state.numericColumns.includes(f.col);
-      const isDate = (state.columnConfig[f.col] ?? state.columnTypes[f.col]) === 'date';
-      const dateFilter = isDate ? ExcelParser.parseDateValue(f.value) : null;
-      rows = rows.filter(row => {
-        const val    = row[f.col];
-        const strVal = String(val ?? '').toLowerCase().trim();
-        const numericValue = ExcelParser.parseNumericValue(val);
-        const dateValue = isDate ? ExcelParser.parseDateValue(val) : null;
-        switch (f.op) {
-          case 'contains': return strVal.includes(fVal);
-          case 'starts':   return strVal.startsWith(fVal);
-          case 'equals':   if (isDate && dateFilter) return dateValue !== null && dateValue.getTime() === dateFilter.getTime();
-                           return isNumeric && numericFilter !== null
-                             ? numericValue !== null && numericValue === numericFilter
-                             : strVal === fVal;
-          case 'gt':       if (isDate && dateFilter) return dateValue !== null && dateValue > dateFilter;
-                           return numericValue !== null && numericFilter !== null && numericValue > numericFilter;
-          case 'lt':       if (isDate && dateFilter) return dateValue !== null && dateValue < dateFilter;
-                           return numericValue !== null && numericFilter !== null && numericValue < numericFilter;
-          case 'gte':      if (isDate && dateFilter) return dateValue !== null && dateValue >= dateFilter;
-                           return numericValue !== null && numericFilter !== null && numericValue >= numericFilter;
-          case 'lte':      if (isDate && dateFilter) return dateValue !== null && dateValue <= dateFilter;
-                           return numericValue !== null && numericFilter !== null && numericValue <= numericFilter;
-          default:         return true;
-        }
-      });
-    }
+    if (state.activeFilter) rows = rows.filter(row => rowMatchesFilter(row, state.activeFilter));
 
     // Filtro cruzado (clique em gráfico)
     Object.values(state.widgetFilters).forEach(group => {
-      Object.entries(group ?? {}).forEach(([col, value]) => {
-        const filterValue = String(value ?? '').trim();
-        if (!col || !filterValue) return;
-        const numericFilter = ExcelParser.parseNumericValue(value);
-        const isNumeric = state.numericColumns.includes(col);
-        const isDate = (state.columnConfig[col] ?? state.columnTypes[col]) === 'date';
-        const dateFilter = isDate ? ExcelParser.parseDateValue(value) : null;
-        rows = rows.filter(row => {
-          const raw = row[col];
-          const rowValue = String(raw ?? '').trim();
-          if (isDate && dateFilter) {
-            const rowDate = ExcelParser.parseDateValue(raw);
-            return rowDate !== null && rowDate.getTime() === dateFilter.getTime();
-          }
-          if (isNumeric && numericFilter !== null) {
-            return ExcelParser.parseNumericValue(raw) === numericFilter;
-          }
-          return rowValue === filterValue;
-        });
+      Object.entries(group ?? {}).forEach(([col, filter]) => {
+        const normalized = filter && typeof filter === 'object'
+          ? { col, ...filter }
+          : { col, op: 'equals', value: filter };
+        rows = rows.filter(row => rowMatchesFilter(row, normalized));
       });
     });
 
@@ -540,6 +566,34 @@ const App = (() => {
     await Dashboard.renderAll();
   }
 
+  function setDrillThroughFilter(col, value) {
+    state.crossFilter = { col, value };
+    invalidateMemoryCache();
+    updateCrossFilterIndicator();
+  }
+
+  async function toggleWidgetFilterValue(widgetId, column, value, checked) {
+    state.widgetFilters[widgetId] ??= {};
+    const current = state.widgetFilters[widgetId][column];
+    const values = new Set(current?.op === 'in' ? current.values : []);
+    if (checked) values.add(value);
+    else values.delete(value);
+    if (values.size) state.widgetFilters[widgetId][column] = { op: 'in', values: [...values] };
+    else delete state.widgetFilters[widgetId][column];
+    if (!Object.keys(state.widgetFilters[widgetId]).length) delete state.widgetFilters[widgetId];
+    invalidateMemoryCache();
+    await Dashboard.renderAll();
+  }
+
+  async function setWidgetRangeFilter(widgetId, column, from, to) {
+    state.widgetFilters[widgetId] ??= {};
+    if (from || to) state.widgetFilters[widgetId][column] = { op: 'between', from, to };
+    else delete state.widgetFilters[widgetId][column];
+    if (!Object.keys(state.widgetFilters[widgetId]).length) delete state.widgetFilters[widgetId];
+    invalidateMemoryCache();
+    await Dashboard.renderAll();
+  }
+
   async function clearWidgetFilters(widgetId) {
     delete state.widgetFilters[widgetId];
     invalidateMemoryCache();
@@ -552,11 +606,26 @@ const App = (() => {
     invalidateMemoryCache();
   }
 
-  async function getDistinctValues(column) {
+  async function getDistinctValues(column, excludeWidgetId = '', excludeColumn = '') {
     if (!state.columns.includes(column)) return [];
-    if (state.dataMode === 'query') return DataEngine.distinct(column);
+    const filters = getActiveFilters().filter(filter =>
+      !(excludeWidgetId && state.widgetFilters[excludeWidgetId] &&
+        filter.col === excludeColumn &&
+        (filter.op === 'in' || filter.op === 'between'))
+    );
+    if (state.dataMode === 'query') return DataEngine.distinct(column, filters, state.crossFilter);
     const values = new Map();
-    state.rows.forEach(row => {
+    state.rows.filter(row => {
+      if (!filters.every(filter => rowMatchesFilter(row, filter))) return false;
+      if (!state.crossFilter?.col) return true;
+      const raw = row[state.crossFilter.col];
+      const expected = String(state.crossFilter.value ?? '').trim();
+      if (expected === '(vazio)') return String(raw ?? '').trim() === '';
+      if (expected === '(data inválida)' || expected === '(data invÃ¡lida)') {
+        return String(raw ?? '').trim() !== '' && ExcelParser.parseDateValue(raw) === null;
+      }
+      return rowMatchesFilter(row, { col: state.crossFilter.col, op: 'equals', value: expected });
+    }).forEach(row => {
       const raw = row[column];
       const key = String(raw ?? '').trim();
       if (!key || values.has(key)) return;
@@ -565,6 +634,109 @@ const App = (() => {
     return [...values.values()]
       .sort((a, b) => String(a).localeCompare(String(b), 'pt-BR', { numeric: true, sensitivity: 'base' }))
       .slice(0, 500);
+  }
+
+  let editingCalculatedId = '';
+
+  function renderCalculatedFieldsList() {
+    const list = document.getElementById('calculated-fields-list');
+    if (!list) return;
+    list.innerHTML = state.calculatedFields.length
+      ? state.calculatedFields.map(field => `
+        <div class="calculated-field-item">
+          <button onclick="App.editCalculatedField('${field.id}')">
+            <strong>${escHtml(field.name)}</strong><small>${escHtml(field.formula)}</small>
+          </button>
+          <button class="calculated-field-delete" onclick="App.deleteCalculatedField('${field.id}')" title="Excluir"><i class="fa-solid fa-xmark"></i></button>
+        </div>`).join('')
+      : '<p class="calculated-fields-empty">Nenhum campo calculado.</p>';
+  }
+
+  function openCalculatedFieldModal() {
+    if (!state.rowCount) { toast('Carregue um arquivo primeiro.', 'error'); return; }
+    editingCalculatedId = '';
+    document.getElementById('calculated-name').value = '';
+    document.getElementById('calculated-formula').value = '';
+    document.getElementById('calculated-columns').innerHTML = Object.keys(state.columnTypes)
+      .filter(column => state.columnConfig[column] !== 'excluded')
+      .map(column => `<button type="button" onclick="App.insertCalculatedColumn('${escHtml(escJs(column))}')">[${escHtml(column)}]</button>`)
+      .join('');
+    document.getElementById('calculated-overlay').classList.add('open');
+  }
+
+  function closeCalculatedFieldModal() {
+    document.getElementById('calculated-overlay')?.classList.remove('open');
+  }
+
+  function insertCalculatedColumn(column) {
+    const input = document.getElementById('calculated-formula');
+    if (!input) return;
+    const insertion = `[${column}]`;
+    input.setRangeText(insertion, input.selectionStart, input.selectionEnd, 'end');
+    input.focus();
+  }
+
+  function editCalculatedField(id) {
+    const field = state.calculatedFields.find(item => item.id === id);
+    if (!field) return;
+    openCalculatedFieldModal();
+    editingCalculatedId = id;
+    document.getElementById('calculated-name').value = field.name;
+    document.getElementById('calculated-formula').value = field.formula;
+  }
+
+  async function saveCalculatedField() {
+    const name = document.getElementById('calculated-name')?.value.trim();
+    const formula = document.getElementById('calculated-formula')?.value.trim();
+    if (!name || !formula) { toast('Informe nome e fórmula.', 'error'); return; }
+    const baseColumns = Object.keys(state.columnTypes).filter(column => state.columnConfig[column] !== 'excluded');
+    const duplicate = baseColumns.includes(name) || state.calculatedFields.some(field => field.name === name && field.id !== editingCalculatedId);
+    if (duplicate) { toast('Já existe uma coluna com esse nome.', 'error'); return; }
+    try { ExcelParser.validateFormula(formula, baseColumns); }
+    catch (error) { toast(error.message, 'error'); return; }
+    if (editingCalculatedId) {
+      const field = state.calculatedFields.find(item => item.id === editingCalculatedId);
+      Object.assign(field, { name, formula });
+    } else {
+      state.calculatedFields.push({ id: `calc_${Date.now()}`, name, formula });
+    }
+    await applyColumnConfig();
+    renderColumnsList();
+    renderCalculatedFieldsList();
+    await Dashboard.renderAll();
+    closeCalculatedFieldModal();
+    toast('Campo calculado aplicado.', 'success');
+  }
+
+  async function deleteCalculatedField(id) {
+    const field = state.calculatedFields.find(item => item.id === id);
+    if (!field || !confirm(`Excluir o campo calculado "${field.name}"?`)) return;
+    state.calculatedFields = state.calculatedFields.filter(item => item.id !== id);
+    delete state.columnConfig[field.name];
+    await applyColumnConfig();
+    renderColumnsList();
+    renderCalculatedFieldsList();
+    await Dashboard.renderAll();
+  }
+
+  async function loadCalculatedFields(fields) {
+    const baseColumns = Object.keys(state.columnTypes).filter(column => state.columnConfig[column] !== 'excluded');
+    const names = new Set();
+    state.calculatedFields = (Array.isArray(fields) ? fields : []).filter(field => {
+      try {
+        if (!field?.name || baseColumns.includes(field.name) || names.has(field.name)) return false;
+        ExcelParser.validateFormula(field.formula, baseColumns);
+        names.add(field.name);
+        return true;
+      } catch (_) { return false; }
+    }).map((field, index) => ({
+      id: /^calc_[a-z0-9_-]+$/i.test(field.id ?? '') ? field.id : `calc_${index + 1}`,
+      name: field.name,
+      formula: field.formula,
+    }));
+    await applyColumnConfig();
+    renderCalculatedFieldsList();
+    renderColumnsList();
   }
 
   /* ── Modal de mapeamento de colunas ─────── */
@@ -668,6 +840,7 @@ const App = (() => {
       ? `${state.fileName} · motor analítico`
       : state.fileName;
     renderColumnsList();
+    renderCalculatedFieldsList();
     Dashboard.updatePlaceholder();
     Dashboard.resetHistory();
     // Garante que indicadores de filtro estão limpos
@@ -1074,10 +1247,12 @@ const App = (() => {
     switchSheet,
     getRows,
     getFilteredCount, queryAggregate, queryKPI, queryTable, queryScatter, getDistinctValues,
-    setCrossFilter, clearCrossFilter,
-    setWidgetFilter, clearWidgetFilters, removeWidgetFilters,
+    setCrossFilter, setDrillThroughFilter, clearCrossFilter,
+    setWidgetFilter, toggleWidgetFilterValue, setWidgetRangeFilter, clearWidgetFilters, removeWidgetFilters,
     toggleFilterBar, onFilterColChange, applyFilter, clearFilter,
     openColumnMappingModal, closeColumnMappingModal, confirmColumnMapping, onColTypeChange,
+    openCalculatedFieldModal, closeCalculatedFieldModal, insertCalculatedColumn,
+    saveCalculatedField, editCalculatedField, deleteCalculatedField, loadCalculatedFields,
     saveDashboard, loadDashboard, deleteSaved,
     renderThemePicker, renderBgPicker, renderColumnsList,
     setTheme, syncCustomColorFromHex, syncCustomColorFromRGB, applyCustomTheme, setBg,

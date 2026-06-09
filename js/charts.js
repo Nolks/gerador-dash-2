@@ -304,26 +304,32 @@ const Charts = (() => {
     } else if (['bar', 'line', 'area'].includes(type)) {
       data = {
         labels: preparedRows.map(row => row.label),
-        datasets: cfg.yColumns.map((col, i) => ({
-          label: col,
-          data: preparedRows.map(row => Number(row[col] ?? 0)),
-          backgroundColor: type === 'bar' ? colors[i] + 'cc' : colors[i] + '33',
-          borderColor: colors[i],
-          borderWidth: type === 'bar' ? 0 : 2,
-          borderRadius: type === 'bar' ? 6 : 0,
-          fill: type === 'area',
-          tension: 0.4,
-          pointRadius: type === 'line' || type === 'area' ? 4 : 0,
-          pointHoverRadius: 6,
-        })),
+        datasets: cfg.yColumns.map((col, i) => {
+          const values = preparedRows.map(row => Number(row[col] ?? 0));
+          const conditional = conditionalChartColors(values, cfg);
+          return {
+            label: col,
+            data: values,
+            backgroundColor: conditional ?? (type === 'bar' ? colors[i] + 'cc' : colors[i] + '33'),
+            pointBackgroundColor: conditional ?? colors[i],
+            borderColor: colors[i],
+            borderWidth: type === 'bar' ? 0 : 2,
+            borderRadius: type === 'bar' ? 6 : 0,
+            fill: type === 'area',
+            tension: 0.4,
+            pointRadius: type === 'line' || type === 'area' ? 4 : 0,
+            pointHoverRadius: 6,
+          };
+        }),
       };
     } else if (['pie', 'doughnut'].includes(type)) {
       const valueCol = cfg.yColumns?.[0];
+      const values = preparedRows.map(row => Number(row[valueCol] ?? 0));
       data = {
         labels: preparedRows.map(row => row.label),
         datasets: [{
-          data: preparedRows.map(row => Number(row[valueCol] ?? 0)),
-          backgroundColor: colors.map(color => color + 'dd'),
+          data: values,
+          backgroundColor: conditionalChartColors(values, cfg) ?? colors.map(color => color + 'dd'),
           borderColor: '#fff',
           borderWidth: 2,
           hoverOffset: 8,
@@ -350,18 +356,23 @@ const Charts = (() => {
       const agg = aggregate(rows, cfg.xColumn, cfg.yColumns, cfg.aggregation, cfg.limit, cfg.sortBy, cfg.sortDir, aggregationOptions);
       const labels = agg.map(r => r.label);
 
-      const datasets = cfg.yColumns.map((col, i) => ({
-        label: col,
-        data: agg.map(r => r[col]),
-        backgroundColor: type === 'bar' ? colors[i] + 'cc' : colors[i] + '33',
-        borderColor: colors[i],
-        borderWidth: type === 'bar' ? 0 : 2,
-        borderRadius: type === 'bar' ? 6 : 0,
-        fill: type === 'area',
-        tension: 0.4,
-        pointRadius: type === 'line' || type === 'area' ? 4 : 0,
-        pointHoverRadius: 6,
-      }));
+      const datasets = cfg.yColumns.map((col, i) => {
+        const values = agg.map(r => r[col]);
+        const conditional = conditionalChartColors(values, cfg);
+        return {
+          label: col,
+          data: values,
+          backgroundColor: conditional ?? (type === 'bar' ? colors[i] + 'cc' : colors[i] + '33'),
+          pointBackgroundColor: conditional ?? colors[i],
+          borderColor: colors[i],
+          borderWidth: type === 'bar' ? 0 : 2,
+          borderRadius: type === 'bar' ? 6 : 0,
+          fill: type === 'area',
+          tension: 0.4,
+          pointRadius: type === 'line' || type === 'area' ? 4 : 0,
+          pointHoverRadius: 6,
+        };
+      });
 
       return { labels, datasets };
     }
@@ -369,11 +380,12 @@ const Charts = (() => {
     if (['pie', 'doughnut'].includes(type)) {
       if (!cfg.xColumn || !cfg.yColumns?.length) return null;
       const agg = aggregate(rows, cfg.xColumn, cfg.yColumns, cfg.aggregation, cfg.limit, cfg.sortBy, cfg.sortDir, aggregationOptions);
+      const values = agg.map(r => r[cfg.yColumns[0]]);
       return {
         labels: agg.map(r => r.label),
         datasets: [{
-          data: agg.map(r => r[cfg.yColumns[0]]),
-          backgroundColor: colors.map(c => c + 'dd'),
+          data: values,
+          backgroundColor: conditionalChartColors(values, cfg) ?? colors.map(c => c + 'dd'),
           borderColor: '#fff',
           borderWidth: 2,
           hoverOffset: 8,
@@ -424,6 +436,15 @@ const Charts = (() => {
     return number.toLocaleString('pt-BR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
   }
 
+  function conditionalChartColors(values, cfg) {
+    if (!cfg.conditionalEnabled) return null;
+    const threshold = Number(cfg.conditionalValue);
+    if (!Number.isFinite(threshold)) return null;
+    return values.map(value => Number(value) >= threshold
+      ? cfg.conditionalAboveColor ?? '#22c55e'
+      : cfg.conditionalBelowColor ?? '#ef4444');
+  }
+
   function buildOptions(widget, colors) {
     const cfg     = widget.config;
     const type    = widget.type;
@@ -436,7 +457,10 @@ const Charts = (() => {
       if (!elements.length) return;
       const idx   = elements[0].index;
       const label = event.chart.data.labels?.[idx];
-      if (label !== undefined && xCol) App.setCrossFilter(xCol, String(label));
+      if (label !== undefined && xCol) {
+        if (cfg.drillThrough && cfg.drillPageId) Dashboard.drillThrough(cfg.drillPageId, xCol, String(label));
+        else App.setCrossFilter(xCol, String(label));
+      }
     } : undefined;
 
     return {

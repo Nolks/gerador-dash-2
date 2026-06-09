@@ -113,6 +113,9 @@
       <button class="btn btn-ghost icon-btn" onclick="App.toggleFilterBar()" title="Filtro global">
         <i class="fa-solid fa-filter"></i>
       </button>
+      <button class="btn btn-ghost icon-btn" onclick="Dashboard.openPresentationModal()" title="Modo apresentação">
+        <i class="fa-solid fa-display"></i>
+      </button>
       <button class="btn btn-ghost icon-btn" onclick="Dashboard.clearAll()" title="Limpar tudo">
         <i class="fa-solid fa-trash-can"></i>
       </button>
@@ -218,6 +221,14 @@
       </div>
 
       <div class="sidebar-section">
+        <div class="sidebar-label-row">
+          <p class="sidebar-label">Campos calculados</p>
+          <button class="sidebar-add-button" onclick="App.openCalculatedFieldModal()" title="Novo campo calculado"><i class="fa-solid fa-plus"></i></button>
+        </div>
+        <div id="calculated-fields-list" class="calculated-fields-list"></div>
+      </div>
+
+      <div class="sidebar-section">
         <p class="sidebar-label">Paleta de cores</p>
         <div id="theme-picker" class="theme-picker"></div>
       </div>
@@ -305,6 +316,76 @@
 <!-- ═══════════════════════════════════════════════
      MODAL — SENHA DE EXPORTAÇÃO
 ═══════════════════════════════════════════════ -->
+<div class="modal-overlay" id="calculated-overlay">
+  <div class="modal calculated-modal">
+    <div class="modal-header">
+      <div class="modal-header-left">
+        <span class="modal-type-icon"><i class="fa-solid fa-calculator"></i></span>
+        <h2>Campo calculado</h2>
+      </div>
+      <button class="modal-close" onclick="App.closeCalculatedFieldModal()"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Nome do campo</label>
+        <input id="calculated-name" class="form-control" type="text" maxlength="60" placeholder="Ex.: Lucro">
+      </div>
+      <div class="form-group" style="margin-top:16px;">
+        <label class="form-label">Fórmula</label>
+        <input id="calculated-formula" class="form-control" type="text" placeholder="Ex.: [Receita] - [Custo]">
+        <small class="formula-help">Operadores: +, -, *, / e parênteses. Clique nas colunas para inserir.</small>
+      </div>
+      <div id="calculated-columns" class="calculated-columns"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="App.closeCalculatedFieldModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="App.saveCalculatedField()"><i class="fa-solid fa-check"></i> Aplicar campo</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="presentation-overlay">
+  <div class="modal presentation-modal">
+    <div class="modal-header">
+      <div class="modal-header-left">
+        <span class="modal-type-icon"><i class="fa-solid fa-display"></i></span>
+        <h2>Modo apresentação</h2>
+      </div>
+      <button class="modal-close" onclick="Dashboard.closePresentationModal()"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Tempo por página</label>
+          <select id="presentation-interval" class="form-control">
+            <option value="5">5 segundos</option>
+            <option value="10" selected>10 segundos</option>
+            <option value="15">15 segundos</option>
+            <option value="30">30 segundos</option>
+            <option value="60">1 minuto</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Rotação</label>
+          <label class="toggle-wrap"><span class="toggle"><input id="presentation-rotate" type="checkbox" checked><span class="toggle-slider"></span></span>Trocar páginas automaticamente</label>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="Dashboard.closePresentationModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="Dashboard.startPresentation()"><i class="fa-solid fa-play"></i> Iniciar</button>
+    </div>
+  </div>
+</div>
+
+<div id="presentation-controls" class="presentation-controls">
+  <button onclick="Dashboard.previousPresentationPage()" title="Página anterior"><i class="fa-solid fa-chevron-left"></i></button>
+  <span id="presentation-timer">00:10</span>
+  <button onclick="Dashboard.togglePresentationPause()" title="Pausar ou continuar"><i id="presentation-pause-icon" class="fa-solid fa-pause"></i></button>
+  <button onclick="Dashboard.nextPresentationPage()" title="Próxima página"><i class="fa-solid fa-chevron-right"></i></button>
+  <button onclick="Dashboard.stopPresentation()" title="Sair"><i class="fa-solid fa-xmark"></i></button>
+</div>
+
 <div class="pwd-overlay" id="pwd-overlay">
   <div class="pwd-modal">
     <div class="pwd-icon"><i class="fa-solid fa-lock"></i></div>

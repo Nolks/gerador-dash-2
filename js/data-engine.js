@@ -13,6 +13,7 @@ const DataEngine = (() => {
   let active = false;
   let rowCount = 0;
   let columns = [];
+  let baseColumns = [];
   let sourceColumns = {};
   let columnTypes = {};
   let columnConfig = {};
@@ -77,6 +78,7 @@ const DataEngine = (() => {
     active = false;
     rowCount = 0;
     columns = [];
+    baseColumns = [];
     sourceColumns = {};
     columnTypes = {};
     columnConfig = {};
@@ -114,16 +116,17 @@ const DataEngine = (() => {
     const schemaRows = arrowToRows(await conn.query('DESCRIBE SELECT * FROM dash_source'));
     const visibleSchemaRows = schemaRows.filter(row => row.column_name !== ROW_ID);
     const originalColumns = visibleSchemaRows.map(row => row.column_name);
-    columns = ExcelParser.normalizeHeaders(originalColumns);
-    sourceColumns = Object.fromEntries(columns.map((column, index) => [column, originalColumns[index]]));
+    baseColumns = ExcelParser.normalizeHeaders(originalColumns);
+    columns = [...baseColumns];
+    sourceColumns = Object.fromEntries(baseColumns.map((column, index) => [column, originalColumns[index]]));
     const sampleRows = arrowToRows(await conn.query(
-      `SELECT ${columns.map(column => `${quoteId(sourceColumns[column])} AS ${quoteId(column)}`).join(', ')}
+      `SELECT ${baseColumns.map(column => `${quoteId(sourceColumns[column])} AS ${quoteId(column)}`).join(', ')}
        FROM dash_source ORDER BY ${quoteId(ROW_ID)} LIMIT 200`
     ));
     const sampledTypes = ExcelParser.detectTypes(sampleRows);
     columnTypes = Object.fromEntries(
       visibleSchemaRows.map((row, index) => {
-        const column = columns[index];
+        const column = baseColumns[index];
         const nativeType = duckTypeToApp(row.column_type);
         return [column, nativeType === 'string' ? sampledTypes[column] ?? 'string' : nativeType];
       })
@@ -192,10 +195,20 @@ const DataEngine = (() => {
     return `${parts[0]}-${parts[1]}-${parts[2]} ${time}`;
   }
 
-  async function rebuildView(config) {
+  function formulaSql(formula, visibleColumns) {
+    ExcelParser.validateFormula(formula, visibleColumns);
+    return ExcelParser.tokenizeFormula(formula).map(token => {
+      if (token.type === 'column') return `COALESCE(TRY_CAST(${quoteId(token.value)} AS DOUBLE), 0)`;
+      if (token.type === 'number') return String(token.value);
+      return token.value;
+    }).join(' ');
+  }
+
+  async function rebuildView(config, calculatedFields = []) {
     columnConfig = { ...config };
-    const visibleProjections = columns
+    const visibleBaseColumns = baseColumns
       .filter(col => columnConfig[col] !== 'excluded')
+    const visibleProjections = visibleBaseColumns
       .map(col => {
         const id = quoteId(sourceColumns[col] ?? col);
         const alias = quoteId(col);
@@ -208,16 +221,30 @@ const DataEngine = (() => {
       });
 
     if (!visibleProjections.length) throw new Error('Mantenha ao menos uma coluna no conjunto de dados.');
-    const projections = [`${quoteId(ROW_ID)}`, ...visibleProjections];
+    const baseProjections = [`${quoteId(ROW_ID)}`, ...visibleProjections];
+    const calculatedProjections = calculatedFields.map(field =>
+      `TRY_CAST((${formulaSql(field.formula, visibleBaseColumns)}) AS DOUBLE) AS ${quoteId(field.name)}`
+    );
+    columns = [...visibleBaseColumns, ...calculatedFields.map(field => field.name)];
+    calculatedFields.forEach(field => {
+      columnTypes[field.name] = 'number';
+      columnConfig[field.name] = 'number';
+    });
     await conn.query('DROP VIEW IF EXISTS dash_data');
-    await conn.query(`CREATE VIEW dash_data AS SELECT ${projections.join(', ')} FROM dash_source`);
+    await conn.query(`CREATE VIEW dash_data AS
+      SELECT base_data.*${calculatedProjections.length ? `, ${calculatedProjections.join(', ')}` : ''}
+      FROM (SELECT ${baseProjections.join(', ')} FROM dash_source) AS base_data`);
   }
 
   function buildWhere(activeFilter, crossFilter) {
     const clauses = [];
     const filters = (Array.isArray(activeFilter) ? activeFilter : [activeFilter]).filter(Boolean);
     filters.forEach(activeFilter => {
-    if (activeFilter?.col && String(activeFilter.value ?? '').trim() !== '') {
+    if (activeFilter?.col && (
+      (activeFilter.op === 'in' && Array.isArray(activeFilter.values) && activeFilter.values.length) ||
+      (activeFilter.op === 'between' && (activeFilter.from || activeFilter.to)) ||
+      String(activeFilter.value ?? '').trim() !== ''
+    )) {
       const col = quoteId(activeFilter.col);
       const value = String(activeFilter.value).trim();
       const textValue = quoteString(value.toLowerCase());
@@ -225,6 +252,29 @@ const DataEngine = (() => {
       const type = columnConfig[activeFilter.col] ?? columnTypes[activeFilter.col];
       const dateValue = type === 'date' ? dateToSqlTimestamp(value) : null;
       switch (activeFilter.op) {
+        case 'in': {
+          const values = activeFilter.values ?? [];
+          if (!values.length) break;
+          if (type === 'number') {
+            const numericValues = values.map(ExcelParser.parseNumericValue).filter(item => item !== null);
+            if (numericValues.length) clauses.push(`${col} IN (${numericValues.join(', ')})`);
+          } else {
+            clauses.push(`LOWER(TRIM(CAST(${col} AS VARCHAR))) IN (${values.map(item => quoteString(String(item).toLowerCase().trim())).join(', ')})`);
+          }
+          break;
+        }
+        case 'between': {
+          const from = type === 'date' ? dateToSqlTimestamp(activeFilter.from) : ExcelParser.parseNumericValue(activeFilter.from);
+          const to = type === 'date' ? dateToSqlTimestamp(activeFilter.to) : ExcelParser.parseNumericValue(activeFilter.to);
+          const expression = type === 'date' ? dateCastExpression(col) : `TRY_CAST(${col} AS DOUBLE)`;
+          if (from !== null && from !== '') {
+            clauses.push(`${expression} >= ${type === 'date' ? `TIMESTAMP ${quoteString(from)}` : from}`);
+          }
+          if (to !== null && to !== '') {
+            clauses.push(`${expression} <= ${type === 'date' ? `TIMESTAMP ${quoteString(to)}` : to}`);
+          }
+          break;
+        }
         case 'contains':
           clauses.push(`LOWER(CAST(${col} AS VARCHAR)) LIKE '%' || ${textValue} || '%'`);
           break;
@@ -290,13 +340,17 @@ const DataEngine = (() => {
     return Number(result[0]?.total ?? 0);
   }
 
-  async function distinct(column) {
+  async function distinct(column, activeFilter, crossFilter) {
     if (!columns.includes(column)) return [];
     const col = quoteId(column);
+    const where = buildWhere(activeFilter, crossFilter);
+    const conditions = where
+      ? `${where} AND ${col} IS NOT NULL AND TRIM(CAST(${col} AS VARCHAR)) <> ''`
+      : ` WHERE ${col} IS NOT NULL AND TRIM(CAST(${col} AS VARCHAR)) <> ''`;
     const rows = await queryRows(`
       SELECT DISTINCT ${col} AS value
       FROM dash_data
-      WHERE ${col} IS NOT NULL AND TRIM(CAST(${col} AS VARCHAR)) <> ''
+      ${conditions}
       ORDER BY LOWER(CAST(value AS VARCHAR))
       LIMIT 500
     `);

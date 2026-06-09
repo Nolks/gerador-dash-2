@@ -14,6 +14,12 @@ const Dashboard = (() => {
   const pageMap  = {};   // widgetId → página atual da tabela
   const renderVersion = {};
   let layoutEventsReady = false;
+  let presentationHandle = null;
+  let presentationActive = false;
+  let presentationPaused = false;
+  let presentationRotate = true;
+  let presentationSeconds = 10;
+  let presentationRemaining = 10;
 
   /* ── Histórico para Undo/Redo ────────────── */
   const historyStack = [];
@@ -153,6 +159,9 @@ const Dashboard = (() => {
       dateGroup: 'none', showOthers: false,
       valueFormat: 'number', valueDecimals: 0, percentScale: 'direct', currency: 'BRL',
       showLegend: true, showGrid: true,
+      drillThrough: false, drillPageId: '',
+      conditionalEnabled: false, conditionalValue: 0,
+      conditionalAboveColor: '#22c55e', conditionalBelowColor: '#ef4444',
     };
 
     if (type === 'text') return {
@@ -165,6 +174,9 @@ const Dashboard = (() => {
       titleIcon: 'auto',
       columns: cols.slice(0, Math.min(5, cols.length)),
       orientation: 'vertical',
+      selectionMode: 'multiple',
+      showSearch: true,
+      dependent: true,
     };
     if (type === 'image') return {
       titleIcon: 'none',
@@ -188,8 +200,18 @@ const Dashboard = (() => {
       align: 'center',
       fullWidth: false,
     };
-    if (type === 'kpi')     return { titleIcon: 'auto', column: yCol, kpiAgg: 'sum', prefix: '', suffix: '', decimals: 0, valueFormat: 'number', valueDecimals: 0, percentScale: 'direct', currency: 'BRL', iconClass: 'fa-gauge-high' };
-    if (type === 'table')   return { titleIcon: 'auto', columns: cols.slice(0, 6), rowLimit: 15 };
+    if (type === 'kpi')     return {
+      titleIcon: 'auto', column: yCol, kpiAgg: 'sum', prefix: '', suffix: '', decimals: 0,
+      valueFormat: 'number', valueDecimals: 0, percentScale: 'direct', currency: 'BRL',
+      iconClass: 'fa-gauge-high', targetEnabled: false, targetValue: 0, targetDirection: 'higher',
+      goodColor: '#16a34a', warningColor: '#f59e0b', badColor: '#dc2626',
+    };
+    if (type === 'table')   return {
+      titleIcon: 'auto', columns: cols.slice(0, 6), rowLimit: 15,
+      conditionalEnabled: false, conditionalColumn: numCols[0] ?? '',
+      conditionalOperator: 'gte', conditionalValue: 0,
+      conditionalBg: '#dcfce7', conditionalText: '#166534',
+    };
     if (type === 'scatter') return { titleIcon: 'auto', xColumn: numCols[0] ?? '', yColumns: [numCols[1] ?? numCols[0] ?? ''], limit: 100, showLegend: false };
     if (['pie','doughnut'].includes(type)) return { ...base, limit: 10 };
     return base;
@@ -611,7 +633,7 @@ const Dashboard = (() => {
       cols.forEach(c => {
         const v   = formatTableValue(r[c], c);
         const cls = numCols.has(c) ? ' class="num"' : '';
-        html += `<td${cls}>${escHtml(String(v))}</td>`;
+        html += `<td${cls}${conditionalCellStyle(cfg, c, r[c])}>${escHtml(String(v))}</td>`;
       });
       html += '</tr>';
     });
@@ -878,19 +900,37 @@ const Dashboard = (() => {
       renderWidgetError(body, 'Selecione ao menos uma coluna para filtrar');
       return;
     }
-    const optionGroups = await Promise.all(columns.map(column => App.getDistinctValues(column)));
+    const optionGroups = await Promise.all(columns.map(column =>
+      App.getDistinctValues(column, cfg.dependent === false ? '' : w.id, column)
+    ));
     const selected = App.state.widgetFilters[w.id] ?? {};
     const controls = columns.map((column, index) => {
+      const type = App.state.columnConfig[column] ?? App.state.columnTypes[column];
+      if (type === 'date') {
+        const range = selected[column]?.op === 'between' ? selected[column] : {};
+        return `<label class="filter-widget-field filter-date-field" data-filter-column="${escHtml(column)}">
+          <span>${escHtml(column)}</span>
+          <div class="filter-date-range">
+            <input class="form-control filter-date-from" type="date" value="${escHtml(range.from ?? '')}" onchange="Dashboard.applyFilterDateRange('${w.id}','${escHtml(escJs(column))}',this.closest('.filter-date-field'))">
+            <input class="form-control filter-date-to" type="date" value="${escHtml(range.to ?? '')}" onchange="Dashboard.applyFilterDateRange('${w.id}','${escHtml(escJs(column))}',this.closest('.filter-date-field'))">
+          </div>
+        </label>`;
+      }
+      const activeValues = selected[column]?.op === 'in'
+        ? selected[column].values.map(String)
+        : selected[column] === undefined ? [] : [String(selected[column])];
       const options = optionGroups[index].map(value => {
         const stringValue = String(value ?? '');
-        return `<option value="${escHtml(stringValue)}" ${String(selected[column] ?? '') === stringValue ? 'selected' : ''}>${escHtml(stringValue)}</option>`;
+        return `<label class="filter-option" data-filter-text="${escHtml(stringValue.toLowerCase())}">
+          <input type="checkbox" ${activeValues.includes(stringValue) ? 'checked' : ''}
+            onchange="App.toggleWidgetFilterValue('${w.id}','${escHtml(escJs(column))}','${escHtml(escJs(stringValue))}',this.checked)">
+          <span>${escHtml(stringValue)}</span>
+        </label>`;
       }).join('');
       return `<label class="filter-widget-field">
         <span>${escHtml(column)}</span>
-        <select class="form-control" onchange="App.setWidgetFilter('${w.id}','${escHtml(escJs(column))}',this.value)">
-          <option value="">Todos</option>
-          ${options}
-        </select>
+        ${cfg.showSearch === false ? '' : '<input class="form-control filter-option-search" type="search" placeholder="Pesquisar..." oninput="Dashboard.filterFilterOptions(this)">'}
+        <div class="filter-options">${options || '<small>Nenhuma opção disponível</small>'}</div>
       </label>`;
     }).join('');
     body.innerHTML = `<div class="filter-widget ${orientation}">
@@ -899,6 +939,19 @@ const Dashboard = (() => {
         <i class="fa-solid fa-eraser"></i> Limpar filtros
       </button>
     </div>`;
+  }
+
+  function filterFilterOptions(input) {
+    const query = String(input.value ?? '').trim().toLowerCase();
+    input.closest('.filter-widget-field')?.querySelectorAll('.filter-option').forEach(option => {
+      option.hidden = query && !option.dataset.filterText.includes(query);
+    });
+  }
+
+  function applyFilterDateRange(widgetId, column, field) {
+    const from = field?.querySelector('.filter-date-from')?.value ?? '';
+    const to = field?.querySelector('.filter-date-to')?.value ?? '';
+    App.setWidgetRangeFilter(widgetId, column, from, to);
   }
 
   function renderWidgetError(body, message) {
@@ -949,6 +1002,53 @@ const Dashboard = (() => {
     return String(value ?? '');
   }
 
+  function kpiTargetMeta(value, cfg) {
+    if (!cfg.targetEnabled || !Number.isFinite(value)) return null;
+    const target = Number(cfg.targetValue);
+    if (!Number.isFinite(target)) return null;
+    const lowerIsBetter = cfg.targetDirection === 'lower';
+    const reached = lowerIsBetter ? value <= target : value >= target;
+    const rawProgress = lowerIsBetter
+      ? (value <= 0 ? 100 : target / value * 100)
+      : (target === 0 ? (value >= 0 ? 100 : 0) : value / target * 100);
+    const progress = Math.max(0, Math.min(100, rawProgress));
+    const color = reached
+      ? cfg.goodColor ?? '#16a34a'
+      : progress >= 75 ? cfg.warningColor ?? '#f59e0b' : cfg.badColor ?? '#dc2626';
+    return { target, progress, reached, color };
+  }
+
+  function kpiTargetHTML(value, cfg) {
+    const meta = kpiTargetMeta(value, cfg);
+    if (!meta) return { html: '', color: '' };
+    const label = meta.reached ? 'Meta atingida' : meta.progress >= 75 ? 'Atenção' : 'Abaixo da meta';
+    return {
+      color: meta.color,
+      html: `<div class="kpi-target">
+        <div class="kpi-target-row">
+          <span><i class="fa-solid fa-circle" style="color:${meta.color}"></i> ${label}</span>
+          <strong>Meta: ${Charts.formatValue(meta.target, cfg)}</strong>
+        </div>
+        <div class="kpi-progress"><span style="width:${meta.progress}%;background:${meta.color}"></span></div>
+        <small>${meta.progress.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}% do objetivo</small>
+      </div>`,
+    };
+  }
+
+  function conditionalCellStyle(config, column, value) {
+    if (!config.conditionalEnabled || config.conditionalColumn !== column) return '';
+    const current = ExcelParser.parseNumericValue(value);
+    const target = Number(config.conditionalValue);
+    if (current === null || !Number.isFinite(target)) return '';
+    const matches = {
+      gt: current > target,
+      gte: current >= target,
+      lt: current < target,
+      lte: current <= target,
+    }[config.conditionalOperator ?? 'gte'];
+    return matches ? ` style="background:${config.conditionalBg ?? '#dcfce7'};color:${config.conditionalText ?? '#166534'};font-weight:700"` : '';
+  }
+
   function renderQueryKPI(body, w, current, total) {
     const cfg = w.config;
     const value = current.value === null ? null : Number(current.value);
@@ -973,6 +1073,13 @@ const Dashboard = (() => {
         ${trendHTML}
         <div class="kpi-sub">${labels[cfg.kpiAgg] ?? ''} · ${current.rows.toLocaleString('pt-BR')} linhas</div>
       </div>`;
+    const target = kpiTargetHTML(value, cfg);
+    const valueElement = body.querySelector('.kpi-value');
+    if (valueElement && target.color) {
+      valueElement.style.color = target.color;
+      valueElement.style.webkitTextFillColor = target.color;
+    }
+    if (target.html) body.querySelector('.kpi-label')?.insertAdjacentHTML('afterend', target.html);
   }
 
   function renderQueryTable(body, w, result) {
@@ -987,7 +1094,7 @@ const Dashboard = (() => {
       html += '<tr>';
       result.columns.forEach(col => {
         const cls = numCols.has(col) ? ' class="num"' : '';
-        html += `<td${cls}>${escHtml(formatTableValue(row[col], col))}</td>`;
+        html += `<td${cls}${conditionalCellStyle(w.config, col, row[col])}>${escHtml(formatTableValue(row[col], col))}</td>`;
       });
       html += '</tr>';
     });
@@ -1037,6 +1144,13 @@ const Dashboard = (() => {
         <div class="kpi-sub">${aggLabels[cfg.kpiAgg] ?? ''} · ${rows.length} linhas</div>
       </div>
     `;
+    const target = kpiTargetHTML(val, cfg);
+    const valueElement = body.querySelector('.kpi-value');
+    if (valueElement && target.color) {
+      valueElement.style.color = target.color;
+      valueElement.style.webkitTextFillColor = target.color;
+    }
+    if (target.html) body.querySelector('.kpi-label')?.insertAdjacentHTML('afterend', target.html);
   }
 
   function renderTable(body, w, rows) {
@@ -1059,7 +1173,7 @@ const Dashboard = (() => {
       cols.forEach(c => {
         const v   = formatTableValue(r[c], c);
         const cls = numCols.has(c) ? ' class="num"' : '';
-        html += `<td${cls}>${escHtml(String(v))}</td>`;
+        html += `<td${cls}${conditionalCellStyle(cfg, c, r[c])}>${escHtml(String(v))}</td>`;
       });
       html += '</tr>';
     });
@@ -1380,6 +1494,10 @@ const Dashboard = (() => {
             <option value="vertical" ${(cfg.orientation ?? 'vertical') === 'vertical' ? 'selected' : ''}>Vertical — um abaixo do outro</option>
             <option value="horizontal" ${cfg.orientation === 'horizontal' ? 'selected' : ''}>Adaptável — cria colunas ao esticar</option>
           </select>
+          <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:16px;">
+            ${toggleRow('w-filter-search', 'Pesquisa nas opções', cfg.showSearch ?? true)}
+            ${toggleRow('w-filter-dependent', 'Filtros dependentes', cfg.dependent ?? true)}
+          </div>
         </div>`;
       return html;
     }
@@ -1429,6 +1547,22 @@ const Dashboard = (() => {
               <input id="w-suffix" class="form-control" type="text" value="${escHtml(cfg.suffix??'')}" placeholder="%">
             </div>
           </div>
+        </div>
+        <div class="form-section">
+          <div class="form-section-title">Meta e semáforo</div>
+          <div class="form-grid">
+            <div class="form-group full">${toggleRow('w-target-enabled', 'Exibir meta, progresso e semáforo', cfg.targetEnabled ?? false)}</div>
+            <div class="form-group"><label class="form-label">Valor da meta</label><input id="w-target-value" class="form-control" type="number" step="any" value="${cfg.targetValue ?? 0}"></div>
+            <div class="form-group"><label class="form-label">Resultado desejado</label>
+              <select id="w-target-direction" class="form-control">
+                <option value="higher" ${(cfg.targetDirection ?? 'higher') === 'higher' ? 'selected' : ''}>Maior ou igual à meta</option>
+                <option value="lower" ${cfg.targetDirection === 'lower' ? 'selected' : ''}>Menor ou igual à meta</option>
+              </select>
+            </div>
+            <div class="form-group"><label class="form-label">Cor atingida</label><input id="w-good-color" class="form-control color-control" type="color" value="${cfg.goodColor ?? '#16a34a'}"></div>
+            <div class="form-group"><label class="form-label">Cor de atenção</label><input id="w-warning-color" class="form-control color-control" type="color" value="${cfg.warningColor ?? '#f59e0b'}"></div>
+            <div class="form-group"><label class="form-label">Cor crítica</label><input id="w-bad-color" class="form-control color-control" type="color" value="${cfg.badColor ?? '#dc2626'}"></div>
+          </div>
         </div>`;
       return html;
     }
@@ -1443,6 +1577,24 @@ const Dashboard = (() => {
         <div class="form-section">
           <div class="form-section-title">Limite de linhas</div>
           ${limitSelect('w-tbl-limit', cfg.rowLimit??15)}
+        </div>
+        <div class="form-section">
+          <div class="form-section-title">Formatação condicional</div>
+          <div class="form-grid">
+            <div class="form-group full">${toggleRow('w-table-cond-enabled', 'Colorir células conforme uma regra', cfg.conditionalEnabled ?? false)}</div>
+            <div class="form-group"><label class="form-label">Coluna</label>${selCol(numCols, cfg.conditionalColumn, 'w-table-cond-column')}</div>
+            <div class="form-group"><label class="form-label">Condição</label>
+              <select id="w-table-cond-operator" class="form-control">
+                <option value="gte" ${(cfg.conditionalOperator ?? 'gte') === 'gte' ? 'selected' : ''}>Maior ou igual</option>
+                <option value="lte" ${cfg.conditionalOperator === 'lte' ? 'selected' : ''}>Menor ou igual</option>
+                <option value="gt" ${cfg.conditionalOperator === 'gt' ? 'selected' : ''}>Maior que</option>
+                <option value="lt" ${cfg.conditionalOperator === 'lt' ? 'selected' : ''}>Menor que</option>
+              </select>
+            </div>
+            <div class="form-group"><label class="form-label">Valor</label><input id="w-table-cond-value" class="form-control" type="number" step="any" value="${cfg.conditionalValue ?? 0}"></div>
+            <div class="form-group"><label class="form-label">Fundo</label><input id="w-table-cond-bg" class="form-control color-control" type="color" value="${cfg.conditionalBg ?? '#dcfce7'}"></div>
+            <div class="form-group"><label class="form-label">Texto</label><input id="w-table-cond-text" class="form-control color-control" type="color" value="${cfg.conditionalText ?? '#166534'}"></div>
+          </div>
         </div>`;
       return html;
     }
@@ -1574,6 +1726,24 @@ const Dashboard = (() => {
         </div>`;
     }
 
+    html += `
+      <div class="form-section">
+        <div class="form-section-title">Interação e cores automáticas</div>
+        <div class="form-grid">
+          <div class="form-group full">${toggleRow('w-drill-enabled', 'Ao clicar, abrir uma página detalhada filtrada', cfg.drillThrough ?? false)}</div>
+          <div class="form-group full"><label class="form-label">Página de detalhamento</label>
+            <select id="w-drill-page" class="form-control">
+              <option value="">Selecione...</option>
+              ${pages.map(page => `<option value="${escHtml(page.id)}" ${cfg.drillPageId === page.id ? 'selected' : ''}>${escHtml(page.name)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group full">${toggleRow('w-chart-cond-enabled', 'Aplicar cores conforme valor de referência', cfg.conditionalEnabled ?? false)}</div>
+          <div class="form-group"><label class="form-label">Valor de referência</label><input id="w-chart-cond-value" class="form-control" type="number" step="any" value="${cfg.conditionalValue ?? 0}"></div>
+          <div class="form-group"><label class="form-label">Acima/igual</label><input id="w-chart-cond-above" class="form-control color-control" type="color" value="${cfg.conditionalAboveColor ?? '#22c55e'}"></div>
+          <div class="form-group"><label class="form-label">Abaixo</label><input id="w-chart-cond-below" class="form-control color-control" type="color" value="${cfg.conditionalBelowColor ?? '#ef4444'}"></div>
+        </div>
+      </div>`;
+
     return html;
   }
 
@@ -1649,6 +1819,9 @@ const Dashboard = (() => {
     } else if (w.type === 'filter') {
       w.config.columns = [...document.querySelectorAll('#w-filter-cols input:checked')].map(input => input.value);
       w.config.orientation = document.getElementById('w-filter-orientation')?.value ?? 'vertical';
+      w.config.selectionMode = 'multiple';
+      w.config.showSearch = document.getElementById('w-filter-search')?.checked ?? true;
+      w.config.dependent = document.getElementById('w-filter-dependent')?.checked ?? true;
       const activeValues = App.state.widgetFilters[w.id] ?? {};
       Object.keys(activeValues).forEach(column => {
         if (!w.config.columns.includes(column)) delete activeValues[column];
@@ -1664,9 +1837,21 @@ const Dashboard = (() => {
       w.config.currency = document.getElementById('w-currency')?.value ?? 'BRL';
       w.config.prefix   = document.getElementById('w-prefix')?.value    ?? '';
       w.config.suffix   = document.getElementById('w-suffix')?.value    ?? '';
+      w.config.targetEnabled = document.getElementById('w-target-enabled')?.checked ?? false;
+      w.config.targetValue = Number(document.getElementById('w-target-value')?.value ?? 0);
+      w.config.targetDirection = document.getElementById('w-target-direction')?.value ?? 'higher';
+      w.config.goodColor = document.getElementById('w-good-color')?.value ?? '#16a34a';
+      w.config.warningColor = document.getElementById('w-warning-color')?.value ?? '#f59e0b';
+      w.config.badColor = document.getElementById('w-bad-color')?.value ?? '#dc2626';
     } else if (w.type === 'table') {
       w.config.columns  = [...document.querySelectorAll('#w-tbl-cols input:checked')].map(i => i.value);
       w.config.rowLimit = parseInt(document.getElementById('w-tbl-limit')?.value ?? '15');
+      w.config.conditionalEnabled = document.getElementById('w-table-cond-enabled')?.checked ?? false;
+      w.config.conditionalColumn = document.getElementById('w-table-cond-column')?.value ?? '';
+      w.config.conditionalOperator = document.getElementById('w-table-cond-operator')?.value ?? 'gte';
+      w.config.conditionalValue = Number(document.getElementById('w-table-cond-value')?.value ?? 0);
+      w.config.conditionalBg = document.getElementById('w-table-cond-bg')?.value ?? '#dcfce7';
+      w.config.conditionalText = document.getElementById('w-table-cond-text')?.value ?? '#166534';
     } else if (w.type === 'scatter') {
       w.config.xColumn  = document.getElementById('w-xcol')?.value ?? w.config.xColumn;
       w.config.yColumns = [document.getElementById('w-ycol-single')?.value ?? ''];
@@ -1684,6 +1869,12 @@ const Dashboard = (() => {
       w.config.percentScale = document.getElementById('w-percent-scale')?.value ?? 'direct';
       w.config.currency = document.getElementById('w-currency')?.value ?? 'BRL';
       if (w.type === 'bar') w.config.barOrientation = document.getElementById('w-bar-orientation')?.value ?? 'vertical';
+      w.config.drillThrough = document.getElementById('w-drill-enabled')?.checked ?? false;
+      w.config.drillPageId = document.getElementById('w-drill-page')?.value ?? '';
+      w.config.conditionalEnabled = document.getElementById('w-chart-cond-enabled')?.checked ?? false;
+      w.config.conditionalValue = Number(document.getElementById('w-chart-cond-value')?.value ?? 0);
+      w.config.conditionalAboveColor = document.getElementById('w-chart-cond-above')?.value ?? '#22c55e';
+      w.config.conditionalBelowColor = document.getElementById('w-chart-cond-below')?.value ?? '#ef4444';
 
       const isRound = ['pie','doughnut'].includes(w.type);
       if (isRound) {
@@ -1847,6 +2038,93 @@ const Dashboard = (() => {
     return switchPage(index);
   }
 
+  async function drillThrough(pageId, column, value) {
+    App.setDrillThroughFilter(column, value);
+    const index = pages.findIndex(page => page.id === pageId);
+    if (index < 0) {
+      App.toast('A página de detalhamento não existe.', 'error');
+      return;
+    }
+    if (index === activePageIndex) await renderAll();
+    else await switchPage(index);
+  }
+
+  function openPresentationModal() {
+    document.getElementById('presentation-overlay')?.classList.add('open');
+  }
+
+  function closePresentationModal() {
+    document.getElementById('presentation-overlay')?.classList.remove('open');
+  }
+
+  function updatePresentationTimer() {
+    const timer = document.getElementById('presentation-timer');
+    const remaining = Math.max(0, presentationRemaining);
+    const minutes = Math.floor(remaining / 60);
+    const seconds = remaining % 60;
+    if (timer) timer.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  function restartPresentationCountdown() {
+    presentationRemaining = presentationSeconds;
+    updatePresentationTimer();
+  }
+
+  async function nextPresentationPage() {
+    if (!pages.length) return;
+    await switchPage((activePageIndex + 1) % pages.length);
+    restartPresentationCountdown();
+  }
+
+  async function previousPresentationPage() {
+    if (!pages.length) return;
+    await switchPage((activePageIndex - 1 + pages.length) % pages.length);
+    restartPresentationCountdown();
+  }
+
+  function togglePresentationPause() {
+    if (!presentationActive) return;
+    presentationPaused = !presentationPaused;
+    document.getElementById('presentation-pause-icon')?.classList.toggle('fa-pause', !presentationPaused);
+    document.getElementById('presentation-pause-icon')?.classList.toggle('fa-play', presentationPaused);
+  }
+
+  async function startPresentation() {
+    presentationSeconds = Math.max(5, Number(document.getElementById('presentation-interval')?.value) || 10);
+    presentationRotate = document.getElementById('presentation-rotate')?.checked ?? true;
+    presentationPaused = false;
+    presentationActive = true;
+    closePresentationModal();
+    document.body.classList.add('presentation-mode');
+    document.getElementById('presentation-controls')?.classList.add('open');
+    document.getElementById('presentation-pause-icon')?.classList.add('fa-pause');
+    document.getElementById('presentation-pause-icon')?.classList.remove('fa-play');
+    restartPresentationCountdown();
+    clearInterval(presentationHandle);
+    presentationHandle = setInterval(() => {
+      if (!presentationActive || presentationPaused) return;
+      presentationRemaining--;
+      updatePresentationTimer();
+      if (presentationRotate && presentationRemaining <= 0) nextPresentationPage();
+    }, 1000);
+    try { await document.documentElement.requestFullscreen?.(); } catch (_) {}
+  }
+
+  function stopPresentation() {
+    if (!presentationActive) return;
+    presentationActive = false;
+    presentationPaused = false;
+    clearInterval(presentationHandle);
+    presentationHandle = null;
+    document.body.classList.remove('presentation-mode');
+    document.getElementById('presentation-controls')?.classList.remove('open');
+    if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  }
+
+  document.addEventListener('fullscreenchange', () => {
+    if (presentationActive && !document.fullscreenElement) stopPresentation();
+  });
+
   function openPageModal(index) {
     if (!pages[index]) return;
     editingPageIndex = index;
@@ -1919,6 +2197,7 @@ const Dashboard = (() => {
       widgets: pages[0].widgets,
       pages,
       activePage: activePageIndex,
+      calculatedFields: App.state.calculatedFields,
     };
   }
 
@@ -1931,6 +2210,7 @@ const Dashboard = (() => {
       canvas.style.background = data.bg;
       canvas.dataset.bg = data.bg;
     }
+    await App.loadCalculatedFields(data.calculatedFields);
     if (Array.isArray(data.pages) && data.pages.length) {
       pages = data.pages.slice(0, MAX_PAGES).map((page, index) => ({
         id: page.id ?? `page_${index + 1}`,
@@ -1990,6 +2270,10 @@ const Dashboard = (() => {
     serialize, load, getWidgets, generateSuggestedDashboard,
     updatePlaceholder,
     addPage, switchPage, switchPageById, openPageModal, closePageModal, savePageSettings, deletePage,
+    drillThrough,
+    openPresentationModal, closePresentationModal, startPresentation, stopPresentation,
+    nextPresentationPage, previousPresentationPage, togglePresentationPause,
+    filterFilterOptions, applyFilterDateRange,
     toggleButtonDestinationFields, syncModalSizePreset,
     undo, redo, resetHistory,
   };
