@@ -474,9 +474,12 @@ const Exporter = (() => {
     if (!Array.isArray(data.widgets))
       throw new Error('Campo "widgets" ausente ou com tipo incorreto');
 
-    const VALID_TYPES = new Set(['bar','line','area','pie','doughnut','scatter','kpi','table','text']);
+    const VALID_TYPES = new Set(['bar','line','area','pie','doughnut','scatter','kpi','table','text','filter','image','button']);
+    const widgets = Array.isArray(data.pages)
+      ? data.pages.flatMap(page => Array.isArray(page.widgets) ? page.widgets : [])
+      : data.widgets;
 
-    data.widgets.forEach((w, i) => {
+    widgets.forEach((w, i) => {
       const label = `Widget ${i + 1}`;
       if (!w || typeof w !== 'object')
         throw new Error(`${label}: objeto inválido`);

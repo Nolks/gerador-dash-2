@@ -22,6 +22,7 @@ const App = (() => {
     fileSize:        0,
     loadMs:          0,
     activeFilter:   null,   // { col, op, value }
+    widgetFilters:  {},     // widgetId -> { coluna: valor }
     crossFilter:    null,   // { col, value }
   };
 
@@ -36,7 +37,17 @@ const App = (() => {
   }
 
   function memoryFilterKey() {
-    return JSON.stringify([memoryDataVersion, state.activeFilter, state.crossFilter]);
+    return JSON.stringify([memoryDataVersion, state.activeFilter, state.widgetFilters, state.crossFilter]);
+  }
+
+  function getActiveFilters() {
+    const filters = state.activeFilter ? [state.activeFilter] : [];
+    Object.values(state.widgetFilters).forEach(group => {
+      Object.entries(group ?? {}).forEach(([col, value]) => {
+        if (String(value ?? '').trim() !== '') filters.push({ col, op: 'equals', value });
+      });
+    });
+    return filters;
   }
 
   /* ── Init ────────────────────────────────── */
@@ -51,7 +62,7 @@ const App = (() => {
       if (!e.target.closest('#export-dropdown')) closeExportMenu();
     });
     document.addEventListener('keydown', e => {
-      if (e.key === 'Escape') { closeModal(); closeColumnMappingModal(); }
+      if (e.key === 'Escape') { closeModal(); closeColumnMappingModal(); Dashboard.closePageModal(); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); Dashboard.undo(); }
       if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) { e.preventDefault(); Dashboard.redo(); }
     });
@@ -349,26 +360,74 @@ const App = (() => {
     const f = state.activeFilter;
     if (f && f.col && String(f.value ?? '').trim() !== '') {
       const fVal = String(f.value).toLowerCase().trim();
+      const numericFilter = ExcelParser.parseNumericValue(f.value);
+      const isNumeric = state.numericColumns.includes(f.col);
+      const isDate = (state.columnConfig[f.col] ?? state.columnTypes[f.col]) === 'date';
+      const dateFilter = isDate ? ExcelParser.parseDateValue(f.value) : null;
       rows = rows.filter(row => {
         const val    = row[f.col];
-        const strVal = String(val ?? '').toLowerCase();
+        const strVal = String(val ?? '').toLowerCase().trim();
+        const numericValue = ExcelParser.parseNumericValue(val);
+        const dateValue = isDate ? ExcelParser.parseDateValue(val) : null;
         switch (f.op) {
           case 'contains': return strVal.includes(fVal);
           case 'starts':   return strVal.startsWith(fVal);
-          case 'equals':   return strVal === fVal;
-          case 'gt':       return parseFloat(val) >  parseFloat(f.value);
-          case 'lt':       return parseFloat(val) <  parseFloat(f.value);
-          case 'gte':      return parseFloat(val) >= parseFloat(f.value);
-          case 'lte':      return parseFloat(val) <= parseFloat(f.value);
+          case 'equals':   if (isDate && dateFilter) return dateValue !== null && dateValue.getTime() === dateFilter.getTime();
+                           return isNumeric && numericFilter !== null
+                             ? numericValue !== null && numericValue === numericFilter
+                             : strVal === fVal;
+          case 'gt':       if (isDate && dateFilter) return dateValue !== null && dateValue > dateFilter;
+                           return numericValue !== null && numericFilter !== null && numericValue > numericFilter;
+          case 'lt':       if (isDate && dateFilter) return dateValue !== null && dateValue < dateFilter;
+                           return numericValue !== null && numericFilter !== null && numericValue < numericFilter;
+          case 'gte':      if (isDate && dateFilter) return dateValue !== null && dateValue >= dateFilter;
+                           return numericValue !== null && numericFilter !== null && numericValue >= numericFilter;
+          case 'lte':      if (isDate && dateFilter) return dateValue !== null && dateValue <= dateFilter;
+                           return numericValue !== null && numericFilter !== null && numericValue <= numericFilter;
           default:         return true;
         }
       });
     }
 
     // Filtro cruzado (clique em gráfico)
+    Object.values(state.widgetFilters).forEach(group => {
+      Object.entries(group ?? {}).forEach(([col, value]) => {
+        const filterValue = String(value ?? '').trim();
+        if (!col || !filterValue) return;
+        const numericFilter = ExcelParser.parseNumericValue(value);
+        const isNumeric = state.numericColumns.includes(col);
+        const isDate = (state.columnConfig[col] ?? state.columnTypes[col]) === 'date';
+        const dateFilter = isDate ? ExcelParser.parseDateValue(value) : null;
+        rows = rows.filter(row => {
+          const raw = row[col];
+          const rowValue = String(raw ?? '').trim();
+          if (isDate && dateFilter) {
+            const rowDate = ExcelParser.parseDateValue(raw);
+            return rowDate !== null && rowDate.getTime() === dateFilter.getTime();
+          }
+          if (isNumeric && numericFilter !== null) {
+            return ExcelParser.parseNumericValue(raw) === numericFilter;
+          }
+          return rowValue === filterValue;
+        });
+      });
+    });
+
     const cf = state.crossFilter;
     if (cf && cf.col) {
-      rows = rows.filter(row => String(row[cf.col] ?? '') === String(cf.value));
+      const filterValue = String(cf.value ?? '').trim();
+      const isDate = (state.columnConfig[cf.col] ?? state.columnTypes[cf.col]) === 'date';
+      const filterDate = isDate ? ExcelParser.parseDateValue(filterValue) : null;
+      rows = rows.filter(row => {
+        const rowValue = String(row[cf.col] ?? '').trim();
+        if (filterValue === '(vazio)') return rowValue === '';
+        if (filterValue === '(data inválida)') return rowValue !== '' && ExcelParser.parseDateValue(rowValue) === null;
+        if (filterDate) {
+          const rowDate = ExcelParser.parseDateValue(row[cf.col]);
+          return rowDate !== null && rowDate.getTime() === filterDate.getTime();
+        }
+        return rowValue === filterValue;
+      });
     }
 
     filteredRowsCache = { key: cacheKey, rows };
@@ -433,7 +492,9 @@ const App = (() => {
     if (!col || !opSel) return;
 
     const isNum = state.numericColumns.includes(col);
-    opSel.innerHTML = (isNum ? typeOps : textOps).map(op => {
+    const isDate = (state.columnConfig[col] ?? state.columnTypes[col]) === 'date';
+    const dateOps = ['equals', 'gt', 'lt', 'gte', 'lte'];
+    opSel.innerHTML = (isNum ? typeOps : isDate ? dateOps : textOps).map(op => {
       const labels = {
         contains: 'contém', starts: 'começa com', equals: 'igual a',
         gt: 'maior que', lt: 'menor que', gte: '≥', lte: '≤',
@@ -468,6 +529,42 @@ const App = (() => {
     if (countEl) countEl.textContent = '';
     await Dashboard.renderAll();
     toast('Filtro removido');
+  }
+
+  async function setWidgetFilter(widgetId, column, value) {
+    state.widgetFilters[widgetId] ??= {};
+    if (value === '') delete state.widgetFilters[widgetId][column];
+    else state.widgetFilters[widgetId][column] = value;
+    if (!Object.keys(state.widgetFilters[widgetId]).length) delete state.widgetFilters[widgetId];
+    invalidateMemoryCache();
+    await Dashboard.renderAll();
+  }
+
+  async function clearWidgetFilters(widgetId) {
+    delete state.widgetFilters[widgetId];
+    invalidateMemoryCache();
+    await Dashboard.renderAll();
+  }
+
+  function removeWidgetFilters(widgetId) {
+    if (!state.widgetFilters[widgetId]) return;
+    delete state.widgetFilters[widgetId];
+    invalidateMemoryCache();
+  }
+
+  async function getDistinctValues(column) {
+    if (!state.columns.includes(column)) return [];
+    if (state.dataMode === 'query') return DataEngine.distinct(column);
+    const values = new Map();
+    state.rows.forEach(row => {
+      const raw = row[column];
+      const key = String(raw ?? '').trim();
+      if (!key || values.has(key)) return;
+      values.set(key, raw);
+    });
+    return [...values.values()]
+      .sort((a, b) => String(a).localeCompare(String(b), 'pt-BR', { numeric: true, sensitivity: 'base' }))
+      .slice(0, 500);
   }
 
   /* ── Modal de mapeamento de colunas ─────── */
@@ -564,6 +661,7 @@ const App = (() => {
     showLoading('Preparando dashboard…');
     await applyColumnConfig();
     state.activeFilter = null;
+    state.widgetFilters = {};
     state.crossFilter  = null;
     showScreen('dashboard-screen');
     document.getElementById('dash-file-badge').textContent = state.dataMode === 'query'
@@ -661,16 +759,104 @@ const App = (() => {
   }
 
   /* ── Theme & BG pickers ──────────────────── */
+  function normalizeHexColor(value) {
+    const raw = String(value ?? '').trim().replace(/^#/, '');
+    if (/^[0-9a-f]{3}$/i.test(raw)) return '#' + raw.split('').map(char => char + char).join('').toLowerCase();
+    if (/^[0-9a-f]{6}$/i.test(raw)) return '#' + raw.toLowerCase();
+    return null;
+  }
+
+  function hexToRgb(hex) {
+    const normalized = normalizeHexColor(hex);
+    if (!normalized) return null;
+    return {
+      r: parseInt(normalized.slice(1, 3), 16),
+      g: parseInt(normalized.slice(3, 5), 16),
+      b: parseInt(normalized.slice(5, 7), 16),
+    };
+  }
+
+  function rgbToHex(red, green, blue) {
+    const values = [red, green, blue].map(value =>
+      Math.max(0, Math.min(255, Number.parseInt(value, 10) || 0))
+    );
+    return '#' + values.map(value => value.toString(16).padStart(2, '0')).join('');
+  }
+
+  function updateCustomColorControls(hex) {
+    const normalized = normalizeHexColor(hex);
+    const rgb = hexToRgb(normalized);
+    if (!normalized || !rgb) return false;
+    const wheel = document.getElementById('custom-color-wheel');
+    const hexInput = document.getElementById('custom-color-hex');
+    const redInput = document.getElementById('custom-color-r');
+    const greenInput = document.getElementById('custom-color-g');
+    const blueInput = document.getElementById('custom-color-b');
+    if (wheel) wheel.value = normalized;
+    if (hexInput) {
+      hexInput.value = normalized.slice(1).toUpperCase();
+      hexInput.classList.remove('invalid');
+    }
+    if (redInput) redInput.value = rgb.r;
+    if (greenInput) greenInput.value = rgb.g;
+    if (blueInput) blueInput.value = rgb.b;
+    Charts.setCustomTheme(normalized);
+    const previewColors = Charts.getAllThemes().custom?.colors ?? [];
+    document.querySelectorAll('.custom-palette-preview span').forEach((element, index) => {
+      if (previewColors[index]) element.style.background = previewColors[index];
+    });
+    return true;
+  }
+
   function renderThemePicker() {
     const el = document.getElementById('theme-picker');
     if (!el) return;
     const themes  = Charts.getAllThemes();
     const current = Charts.getTheme();
-    el.innerHTML = Object.entries(themes).map(([key, t]) => `
-      <div class="theme-swatch ${current === key ? 'active' : ''}"
-           style="background:${t.swatch}" title="${t.name}"
-           onclick="App.setTheme('${key}')"></div>
-    `).join('');
+    const customColor = Charts.getCustomColor();
+    const rgb = hexToRgb(customColor);
+    const customColors = themes.custom?.colors ?? [customColor];
+    el.innerHTML = `
+      <div class="theme-presets">
+        ${Object.entries(themes).filter(([key]) => key !== 'custom').map(([key, theme]) => `
+          <button class="theme-swatch ${current === key ? 'active' : ''}"
+                  style="background:${theme.swatch}" title="${theme.name}"
+                  aria-label="Aplicar paleta ${theme.name}"
+                  onclick="App.setTheme('${key}')"></button>
+        `).join('')}
+      </div>
+      <div class="custom-theme-editor ${current === 'custom' ? 'active' : ''}">
+        <div class="custom-color-heading">
+          <input id="custom-color-wheel" class="custom-color-wheel" type="color"
+                 value="${customColor}" aria-label="Abrir seletor visual de cores"
+                 oninput="App.syncCustomColorFromHex(this.value)"
+                 onchange="App.applyCustomTheme()" />
+          <div>
+            <strong>Cor personalizada</strong>
+            <span>Seletor visual, RGB ou hexadecimal</span>
+          </div>
+        </div>
+        <label class="custom-color-label" for="custom-color-hex">Buscar por hexadecimal</label>
+        <div class="custom-hex-row">
+          <span>#</span>
+          <input id="custom-color-hex" type="text" maxlength="6" value="${customColor.slice(1).toUpperCase()}"
+                 spellcheck="false" placeholder="6366F1"
+                 oninput="App.syncCustomColorFromHex(this.value)"
+                 onkeydown="if(event.key==='Enter')App.applyCustomTheme()" />
+        </div>
+        <div class="custom-rgb-row">
+          ${[['r','R',rgb.r],['g','G',rgb.g],['b','B',rgb.b]].map(([key, label, value]) => `
+            <label><span>${label}</span><input id="custom-color-${key}" type="number" min="0" max="255"
+              value="${value}" oninput="App.syncCustomColorFromRGB()" /></label>
+          `).join('')}
+        </div>
+        <div class="custom-palette-preview">
+          ${customColors.map(color => `<span style="background:${color}"></span>`).join('')}
+        </div>
+        <button class="custom-color-apply ${current === 'custom' ? 'active' : ''}" onclick="App.applyCustomTheme()">
+          <i class="fa-solid fa-palette"></i> ${current === 'custom' ? 'Paleta personalizada ativa' : 'Aplicar cor personalizada'}
+        </button>
+      </div>`;
   }
 
   function setTheme(name) {
@@ -678,6 +864,42 @@ const App = (() => {
     renderThemePicker();
     Dashboard.renderAll();
     toast('Tema aplicado: ' + Charts.getAllThemes()[name]?.name);
+  }
+
+  function syncCustomColorFromHex(value) {
+    const input = document.getElementById('custom-color-hex');
+    const raw = String(value ?? '').trim().replace(/^#/, '');
+    if (raw.length !== 6) {
+      input?.classList.remove('invalid');
+      return;
+    }
+    const normalized = normalizeHexColor(value);
+    if (!normalized) {
+      input?.classList.add('invalid');
+      return;
+    }
+    updateCustomColorControls(normalized);
+  }
+
+  function syncCustomColorFromRGB() {
+    const red = document.getElementById('custom-color-r')?.value;
+    const green = document.getElementById('custom-color-g')?.value;
+    const blue = document.getElementById('custom-color-b')?.value;
+    updateCustomColorControls(rgbToHex(red, green, blue));
+  }
+
+  function applyCustomTheme() {
+    const hexValue = document.getElementById('custom-color-hex')?.value;
+    const normalized = normalizeHexColor(hexValue);
+    if (!normalized || !Charts.setCustomTheme(normalized)) {
+      document.getElementById('custom-color-hex')?.classList.add('invalid');
+      toast('Informe uma cor hexadecimal válida.', 'error');
+      return;
+    }
+    Charts.setTheme('custom');
+    renderThemePicker();
+    Dashboard.renderAll();
+    toast('Paleta personalizada aplicada: ' + normalized.toUpperCase(), 'success');
   }
 
   function renderBgPicker() {
@@ -762,10 +984,13 @@ const App = (() => {
       const d      = saves[k];
       const dt     = d.savedAt ? new Date(d.savedAt).toLocaleDateString('pt-BR') : '';
       const sizeKB = Math.round(new Blob([JSON.stringify(d)]).size / 1024);
+      const widgetCount = Array.isArray(d.pages)
+        ? d.pages.reduce((total, page) => total + (page.widgets?.length ?? 0), 0)
+        : d.widgets?.length ?? 0;
       return `
         <div class="saved-card">
           <div class="saved-card-title">${escHtml(d.title ?? k)}</div>
-          <div class="saved-card-meta">${d.widgets?.length ?? 0} widgets · ${dt} · ${sizeKB} KB</div>
+          <div class="saved-card-meta">${widgetCount} widgets · ${dt} · ${sizeKB} KB</div>
           <div class="saved-card-actions">
             <button onclick="App.loadDashboard('${escHtml(k)}')"><i class="fa-solid fa-play"></i> Abrir</button>
             <button class="btn-del" onclick="App.deleteSaved('${escHtml(k)}')"><i class="fa-solid fa-trash"></i> Deletar</button>
@@ -819,25 +1044,25 @@ const App = (() => {
 
   async function getFilteredCount() {
     if (state.dataMode === 'query') {
-      return DataEngine.count(state.activeFilter, state.crossFilter);
+      return DataEngine.count(getActiveFilters(), state.crossFilter);
     }
     return getRows().length;
   }
 
   async function queryAggregate(config) {
-    return DataEngine.aggregate(config, state.activeFilter, state.crossFilter);
+    return DataEngine.aggregate(config, getActiveFilters(), state.crossFilter);
   }
 
   async function queryKPI(config, unfiltered = false) {
-    return DataEngine.kpi(config, state.activeFilter, state.crossFilter, unfiltered);
+    return DataEngine.kpi(config, getActiveFilters(), state.crossFilter, unfiltered);
   }
 
   async function queryTable(config, page = 0) {
-    return DataEngine.table(config, page, state.activeFilter, state.crossFilter);
+    return DataEngine.table(config, page, getActiveFilters(), state.crossFilter);
   }
 
   async function queryScatter(config) {
-    return DataEngine.scatter(config, state.activeFilter, state.crossFilter);
+    return DataEngine.scatter(config, getActiveFilters(), state.crossFilter);
   }
 
   return {
@@ -848,13 +1073,14 @@ const App = (() => {
     goToDashboard,
     switchSheet,
     getRows,
-    getFilteredCount, queryAggregate, queryKPI, queryTable, queryScatter,
+    getFilteredCount, queryAggregate, queryKPI, queryTable, queryScatter, getDistinctValues,
     setCrossFilter, clearCrossFilter,
+    setWidgetFilter, clearWidgetFilters, removeWidgetFilters,
     toggleFilterBar, onFilterColChange, applyFilter, clearFilter,
     openColumnMappingModal, closeColumnMappingModal, confirmColumnMapping, onColTypeChange,
     saveDashboard, loadDashboard, deleteSaved,
     renderThemePicker, renderBgPicker, renderColumnsList,
-    setTheme, setBg,
+    setTheme, syncCustomColorFromHex, syncCustomColorFromRGB, applyCustomTheme, setBg,
     closeModal,
     toggleSidebar,
     toggleExportMenu, closeExportMenu,

@@ -4,20 +4,32 @@
 importScripts('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
 
 function sanitizeRows(rows) {
+  if (!rows.length) return rows;
+  const originalKeys = Object.keys(rows[0]);
+  const usedKeys = new Set();
+  const keyMap = new Map();
+  originalKeys.forEach(originalKey => {
+    const base = String(originalKey).trim() || 'Coluna';
+    let cleanKey = base;
+    let suffix = 2;
+    while (usedKeys.has(cleanKey)) cleanKey = `${base} (${suffix++})`;
+    usedKeys.add(cleanKey);
+    keyMap.set(originalKey, cleanKey);
+  });
   let writeIndex = 0;
   for (let readIndex = 0; readIndex < rows.length; readIndex++) {
-    const row = rows[readIndex];
+    const sourceRow = rows[readIndex];
     let hasValue = false;
-    for (const value of Object.values(row)) {
+    for (const value of Object.values(sourceRow)) {
       if (value !== '' && value !== null && value !== undefined) { hasValue = true; break; }
     }
     if (!hasValue) continue;
-    for (const key of Object.keys(row)) {
-      const cleanKey = String(key).trim();
-      if (cleanKey !== key) {
-        row[cleanKey] = row[key];
-        delete row[key];
-      }
+    let row = sourceRow;
+    if (originalKeys.some(key => keyMap.get(key) !== key)) {
+      row = {};
+      originalKeys.forEach(key => {
+        row[keyMap.get(key)] = sourceRow[key];
+      });
     }
     rows[writeIndex++] = row;
   }

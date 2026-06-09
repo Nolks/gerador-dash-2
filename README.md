@@ -55,10 +55,12 @@ gerador-dash/
 - **Agrupamento temporal** por dia, semana, mês, trimestre ou ano
 - **Categoria Outros** para consolidar itens fora do Top N
 - **Formatação de valores** como número, compacto, moeda ou percentual
+- **Valores completos ou abreviados**, como `3.500.000`, `3M` e `3,5M`
 - **Dashboard sugerido** automaticamente a partir dos tipos das colunas
-- **Drag & drop fluido** pelo cabeçalho, com preview do destino, auto-scroll e animações
-- **Redimensionamento por encaixe** em 3, 6, 9 ou 12 colunas
-- **6 paletas de cores** (Índigo, Oceano, Pôr do Sol, Floresta, Noite, Pastel)
+- **Ícones personalizáveis** ao lado do título de cada widget
+- **Movimentação livre** dos widgets pelo canvas, com limites laterais e auto-scroll
+- **Redimensionamento fluido** com largura mínima e máxima, sem encaixe rígido
+- **6 paletas de cores** prontas e uma paleta personalizada por seletor visual, RGB ou hexadecimal
 - **8 fundos de canvas** personalizáveis
 - **Salvar** múltiplos dashboards no `localStorage`
 - **Exportar** como imagem PNG, documento PDF ou JSON reutilizável
@@ -90,7 +92,6 @@ gerador-dash/
 | SheetJS (xlsx)  | 0.18.5  | Leitura de .xlsx/.xls       |
 | DuckDB-Wasm      | 1.32.0  | CSV/Parquet e grandes bases |
 | Chart.js        | 4.4.0   | Renderização de gráficos    |
-| SortableJS      | 1.15.2  | Drag & drop de widgets      |
 | html2canvas     | 1.4.1   | Captura do canvas           |
 | jsPDF           | 2.5.1   | Geração de PDF              |
 | Font Awesome    | 6.5.0   | Ícones                      |

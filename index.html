@@ -159,6 +159,10 @@
     </div>
   </div>
 
+  <div class="dashboard-page-bar">
+    <div id="dashboard-page-tabs" class="dashboard-page-tabs"></div>
+  </div>
+
   <div class="dash-body">
 
     <!-- Painel lateral -->
@@ -192,6 +196,15 @@
           </button>
           <button class="palette-btn" onclick="Dashboard.addWidget('text')" title="Texto e Markdown">
             <i class="fa-solid fa-align-left"></i><span>Texto</span>
+          </button>
+          <button class="palette-btn" onclick="Dashboard.addWidget('filter')" title="Barra de filtros">
+            <i class="fa-solid fa-filter"></i><span>Filtros</span>
+          </button>
+          <button class="palette-btn" onclick="Dashboard.addWidget('image')" title="Imagem ou logo">
+            <i class="fa-solid fa-image"></i><span>Imagem</span>
+          </button>
+          <button class="palette-btn" onclick="Dashboard.addWidget('button')" title="Botão com link">
+            <i class="fa-solid fa-link"></i><span>Botão</span>
           </button>
         </div>
         <button class="btn btn-primary auto-dashboard-btn" onclick="Dashboard.generateSuggestedDashboard()" title="Criar uma composição com base nos tipos das colunas">
@@ -229,7 +242,7 @@
         <i class="fa-solid fa-wand-magic-sparkles"></i>
         <p>Clique em um widget no painel à esquerda para começar</p>
       </div>
-      <div class="canvas-interaction-hint"><i class="fa-solid fa-grip-vertical"></i> Arraste pelo cabeçalho para organizar · use o canto inferior para ajustar a largura</div>
+      <div class="canvas-interaction-hint"><i class="fa-solid fa-up-down-left-right"></i> Mova livremente pelo cabeçalho · arraste o canto inferior para ajustar o tamanho</div>
       <div class="widgets-grid" id="widgets-grid"></div>
     </main>
 
@@ -252,6 +265,37 @@
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="App.closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="Dashboard.saveWidget()">
+        <i class="fa-solid fa-check"></i> Aplicar
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="page-modal-overlay">
+  <div class="modal page-modal">
+    <div class="modal-header">
+      <div class="modal-header-left">
+        <span class="modal-type-icon"><i class="fa-solid fa-file-pen"></i></span>
+        <h2>Editar botão da página</h2>
+      </div>
+      <button class="modal-close" onclick="Dashboard.closePageModal()"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Nome do botão</label>
+        <input id="page-name-input" class="form-control" type="text" maxlength="30">
+      </div>
+      <div class="form-group" style="margin-top:16px;">
+        <label class="form-label">Ícone</label>
+        <div id="page-icon-picker" class="icon-picker"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" id="page-delete-button" class="btn btn-danger page-delete-button" onclick="Dashboard.deletePage()">
+        <i class="fa-solid fa-trash"></i> Excluir página
+      </button>
+      <button type="button" class="btn btn-ghost" onclick="Dashboard.closePageModal()">Cancelar</button>
+      <button type="button" class="btn btn-primary" onclick="Dashboard.savePageSettings()">
         <i class="fa-solid fa-check"></i> Aplicar
       </button>
     </div>
@@ -347,7 +391,6 @@
 <!-- CDNs -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" crossorigin="anonymous"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" crossorigin="anonymous"></script>
 

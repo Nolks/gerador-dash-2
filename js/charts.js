@@ -18,6 +18,87 @@ const Charts = (() => {
   ];
 
   let currentTheme = 'indigo';
+  let customColor = '#6366f1';
+
+  function normalizeHex(value) {
+    const raw = String(value ?? '').trim().replace(/^#/, '');
+    if (/^[0-9a-f]{3}$/i.test(raw)) {
+      return '#' + raw.split('').map(char => char + char).join('').toLowerCase();
+    }
+    if (/^[0-9a-f]{6}$/i.test(raw)) return '#' + raw.toLowerCase();
+    return null;
+  }
+
+  function hexToHsl(hex) {
+    const normalized = normalizeHex(hex) ?? '#6366f1';
+    const red = parseInt(normalized.slice(1, 3), 16) / 255;
+    const green = parseInt(normalized.slice(3, 5), 16) / 255;
+    const blue = parseInt(normalized.slice(5, 7), 16) / 255;
+    const max = Math.max(red, green, blue);
+    const min = Math.min(red, green, blue);
+    const delta = max - min;
+    let hue = 0;
+    if (delta) {
+      if (max === red) hue = 60 * (((green - blue) / delta) % 6);
+      else if (max === green) hue = 60 * ((blue - red) / delta + 2);
+      else hue = 60 * ((red - green) / delta + 4);
+    }
+    if (hue < 0) hue += 360;
+    const lightness = (max + min) / 2;
+    const saturation = delta ? delta / (1 - Math.abs(2 * lightness - 1)) : 0;
+    return { h: hue, s: saturation * 100, l: lightness * 100 };
+  }
+
+  function hslToHex(hue, saturation, lightness) {
+    const s = saturation / 100;
+    const l = lightness / 100;
+    const chroma = (1 - Math.abs(2 * l - 1)) * s;
+    const segment = ((hue % 360) + 360) % 360 / 60;
+    const x = chroma * (1 - Math.abs(segment % 2 - 1));
+    const match = l - chroma / 2;
+    const values = segment < 1 ? [chroma, x, 0]
+      : segment < 2 ? [x, chroma, 0]
+      : segment < 3 ? [0, chroma, x]
+      : segment < 4 ? [0, x, chroma]
+      : segment < 5 ? [x, 0, chroma]
+      : [chroma, 0, x];
+    return '#' + values.map(value =>
+      Math.round((value + match) * 255).toString(16).padStart(2, '0')
+    ).join('');
+  }
+
+  function buildCustomColors(hex) {
+    const base = hexToHsl(hex);
+    const saturation = Math.max(48, base.s);
+    return [
+      normalizeHex(hex),
+      hslToHex(base.h + 24, saturation, clampLightness(base.l + 8)),
+      hslToHex(base.h - 24, Math.max(42, saturation - 8), clampLightness(base.l + 14)),
+      hslToHex(base.h + 52, Math.max(45, saturation - 4), clampLightness(base.l - 6)),
+      hslToHex(base.h - 52, saturation, clampLightness(base.l - 12)),
+      hslToHex(base.h + 180, Math.max(42, saturation - 18), clampLightness(base.l + 4)),
+      hslToHex(base.h + 90, Math.max(40, saturation - 15), clampLightness(base.l + 12)),
+      hslToHex(base.h - 90, Math.max(38, saturation - 20), clampLightness(base.l + 20)),
+    ];
+  }
+
+  function clampLightness(value) {
+    return Math.max(24, Math.min(78, value));
+  }
+
+  function setCustomTheme(value) {
+    const normalized = normalizeHex(value);
+    if (!normalized) return false;
+    customColor = normalized;
+    THEMES.custom = {
+      name: 'Personalizada',
+      swatch: normalized,
+      colors: buildCustomColors(normalized),
+    };
+    return true;
+  }
+
+  setCustomTheme(customColor);
 
   function getColors(n = 8) {
     const base = THEMES[currentTheme]?.colors ?? THEMES.indigo.colors;
@@ -26,35 +107,52 @@ const Charts = (() => {
     return out;
   }
 
-  function setTheme(name) { currentTheme = name; }
+  function setTheme(name) { currentTheme = THEMES[name] ? name : 'indigo'; }
   function getTheme() { return currentTheme; }
+  function getCustomColor() { return customColor; }
   function getAllThemes() { return THEMES; }
   function getBgColors() { return BG_COLORS; }
 
   /* ── Agregação de dados ──────────────────── */
   function toNumber(value) {
     if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-    const normalized = ExcelParser.normalizeNumericValue(value);
-    if (normalized === '') return null;
-    const parsed = Number.parseFloat(normalized);
-    return Number.isFinite(parsed) ? parsed : null;
+    return ExcelParser.parseNumericValue(value);
   }
 
   function parseDateValue(value) {
-    if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
-    const text = String(value ?? '').trim();
-    const br = text.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})/);
-    if (br) {
-      const year = br[3].length === 2 ? Number('20' + br[3]) : Number(br[3]);
-      const date = new Date(year, Number(br[2]) - 1, Number(br[1]));
-      return Number.isNaN(date.getTime()) ? null : date;
-    }
-    const date = new Date(text);
-    return Number.isNaN(date.getTime()) ? null : date;
+    return ExcelParser.parseDateValue(value);
   }
 
-  function dateGroupLabel(value, group) {
-    if (!group || group === 'none') return String(value ?? '(vazio)').trim();
+  function isoWeekLabel(date) {
+    const utc = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    const day = utc.getUTCDay() || 7;
+    utc.setUTCDate(utc.getUTCDate() + 4 - day);
+    const isoYear = utc.getUTCFullYear();
+    const yearStart = new Date(Date.UTC(isoYear, 0, 1));
+    const week = Math.ceil((((utc - yearStart) / 86400000) + 1) / 7);
+    return isoYear + ' S' + String(week).padStart(2, '0');
+  }
+
+  function formatDateLabel(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hour = String(date.getHours()).padStart(2, '0');
+    const minute = String(date.getMinutes()).padStart(2, '0');
+    const second = String(date.getSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+  }
+
+  function dateGroupLabel(value, group, xType) {
+    if (!group || group === 'none') {
+      if (xType === 'date') {
+        if (value === '' || value === null || value === undefined) return '(vazio)';
+        const date = parseDateValue(value);
+        return date ? formatDateLabel(date) : '(data inválida)';
+      }
+      const label = String(value ?? '').trim();
+      return label || '(vazio)';
+    }
     const date = parseDateValue(value);
     if (!date) return '(data inválida)';
     const year = date.getFullYear();
@@ -62,11 +160,7 @@ const Charts = (() => {
     if (group === 'year') return String(year);
     if (group === 'quarter') return year + ' T' + (Math.floor(date.getMonth() / 3) + 1);
     if (group === 'month') return year + '-' + month;
-    if (group === 'week') {
-      const first = new Date(year, 0, 1);
-      const week = Math.ceil((((date - first) / 86400000) + first.getDay() + 1) / 7);
-      return year + ' S' + String(week).padStart(2, '0');
-    }
+    if (group === 'week') return isoWeekLabel(date);
     return year + '-' + month + '-' + String(date.getDate()).padStart(2, '0');
   }
 
@@ -74,7 +168,7 @@ const Charts = (() => {
     const groups = new Map();
 
     for (const row of rows) {
-      const key = dateGroupLabel(row[xCol], options.dateGroup);
+      const key = dateGroupLabel(row[xCol], options.dateGroup, options.xType);
       let group = groups.get(key);
       if (!group) {
         group = { rowCount: 0, values: Object.create(null) };
@@ -117,9 +211,19 @@ const Charts = (() => {
     if (sortBy === 'value' && yCols.length) {
       result.sort((a, b) => sortDir === 'asc' ? a[yCols[0]] - b[yCols[0]] : b[yCols[0]] - a[yCols[0]]);
     } else if (sortBy === 'label') {
-      result.sort((a, b) => sortDir === 'asc'
-        ? String(a.label).localeCompare(String(b.label))
-        : String(b.label).localeCompare(String(a.label)));
+      result.sort((a, b) => {
+        const aPlaceholder = a.label === '(vazio)' || a.label === '(data inválida)';
+        const bPlaceholder = b.label === '(vazio)' || b.label === '(data inválida)';
+        if (options.xType === 'date' && aPlaceholder !== bPlaceholder) return aPlaceholder ? 1 : -1;
+        let comparison;
+        if (options.xType === 'date') {
+          const aDate = parseDateValue(a.label);
+          const bDate = parseDateValue(b.label);
+          if (aDate && bDate) comparison = aDate - bDate;
+        }
+        comparison ??= String(a.label).localeCompare(String(b.label), 'pt-BR', { sensitivity: 'base', numeric: true });
+        return sortDir === 'asc' ? comparison : -comparison;
+      });
     }
 
     const visible = result.slice(0, limit);
@@ -150,11 +254,11 @@ const Charts = (() => {
       if (value > max) max = value;
     }
 
+    if (agg === 'count') return count;
     if (!count) return null;
     switch (agg) {
       case 'sum': return sum;
       case 'avg': return sum / count;
-      case 'count': return count;
       case 'max': return max;
       case 'min': return min;
       default: return sum;
@@ -236,10 +340,14 @@ const Charts = (() => {
   function buildChartData(widget, rows, colors) {
     const cfg = widget.config;
     const type = widget.type;
+    const xType = typeof App !== 'undefined'
+      ? App.state.columnConfig[cfg.xColumn] ?? App.state.columnTypes[cfg.xColumn]
+      : cfg.xType;
+    const aggregationOptions = { ...cfg, xType };
 
     if (['bar', 'line', 'area'].includes(type)) {
       if (!cfg.xColumn || !cfg.yColumns?.length) return null;
-      const agg = aggregate(rows, cfg.xColumn, cfg.yColumns, cfg.aggregation, cfg.limit, cfg.sortBy, cfg.sortDir, cfg);
+      const agg = aggregate(rows, cfg.xColumn, cfg.yColumns, cfg.aggregation, cfg.limit, cfg.sortBy, cfg.sortDir, aggregationOptions);
       const labels = agg.map(r => r.label);
 
       const datasets = cfg.yColumns.map((col, i) => ({
@@ -260,7 +368,7 @@ const Charts = (() => {
 
     if (['pie', 'doughnut'].includes(type)) {
       if (!cfg.xColumn || !cfg.yColumns?.length) return null;
-      const agg = aggregate(rows, cfg.xColumn, cfg.yColumns, cfg.aggregation, cfg.limit, cfg.sortBy, cfg.sortDir, cfg);
+      const agg = aggregate(rows, cfg.xColumn, cfg.yColumns, cfg.aggregation, cfg.limit, cfg.sortBy, cfg.sortDir, aggregationOptions);
       return {
         labels: agg.map(r => r.label),
         datasets: [{
@@ -279,19 +387,12 @@ const Charts = (() => {
       const yCol = cfg.yColumns[0];
       const limit = Math.max(1, Number.parseInt(cfg.limit, 10) || 100);
       const pts = [];
-      let validCount = 0;
       for (const row of rows) {
         const x = toNumber(row[xCol]);
         const y = toNumber(row[yCol]);
         if (x === null || y === null) continue;
-        validCount++;
-        const point = { x, y };
-        if (pts.length < limit) {
-          pts.push(point);
-        } else {
-          const index = Math.floor(Math.random() * validCount);
-          if (index < limit) pts[index] = point;
-        }
+        pts.push({ x, y });
+        if (pts.length >= limit) break;
       }
       return {
         datasets: [{
@@ -316,7 +417,8 @@ const Charts = (() => {
       return number.toLocaleString('pt-BR', { style: 'currency', currency: cfg.currency || 'BRL', minimumFractionDigits: decimals, maximumFractionDigits: decimals });
     }
     if (cfg.valueFormat === 'percent') {
-      return number.toLocaleString('pt-BR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) + '%';
+      const percent = cfg.percentScale === 'fraction' ? number * 100 : number;
+      return percent.toLocaleString('pt-BR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) + '%';
     }
     if (cfg.valueFormat === 'compact') return ExcelParser.fmtNumber(number, decimals);
     return number.toLocaleString('pt-BR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
@@ -326,6 +428,7 @@ const Charts = (() => {
     const cfg     = widget.config;
     const type    = widget.type;
     const isRound = ['pie', 'doughnut'].includes(type);
+    const isHorizontalBar = type === 'bar' && cfg.barOrientation === 'horizontal';
 
     // Filtro cruzado: clique em barra/fatia/ponto filtra todos os widgets
     const xCol = cfg.xColumn;
@@ -338,7 +441,8 @@ const Charts = (() => {
 
     return {
       responsive: true,
-      maintainAspectRatio: true,
+      maintainAspectRatio: false,
+      indexAxis: type === 'bar' && cfg.barOrientation === 'horizontal' ? 'y' : 'x',
       animation: { duration: 500 },
       onClick,
       plugins: {
@@ -359,7 +463,17 @@ const Charts = (() => {
       scales: isRound || type === 'scatter' ? (type === 'scatter' ? {
         x: { grid: { color: '#f1f5f9' } },
         y: { grid: { color: '#f1f5f9' } },
-      } : {}) : {
+      } : {}) : isHorizontalBar ? {
+        x: {
+          grid: { display: cfg.showGrid ?? true, color: '#f1f5f9' },
+          ticks: { font: { size: 11 }, callback: value => formatValue(value, cfg) },
+          beginAtZero: true,
+        },
+        y: {
+          grid: { display: cfg.showGrid ?? true, color: '#f1f5f9' },
+          ticks: { font: { size: 11 } },
+        },
+      } : {
         x: {
           grid: { display: cfg.showGrid ?? true, color: '#f1f5f9' },
           ticks: { maxRotation: 40, font: { size: 11 } },
@@ -373,5 +487,9 @@ const Charts = (() => {
     };
   }
 
-  return { create, createPrepared, aggregate, calcKPI, formatValue, setTheme, getTheme, getAllThemes, getColors, getBgColors };
+  return {
+    create, createPrepared, aggregate, calcKPI, formatValue,
+    setTheme, setCustomTheme, getTheme, getCustomColor,
+    getAllThemes, getColors, getBgColors,
+  };
 })();

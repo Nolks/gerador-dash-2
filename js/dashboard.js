@@ -5,10 +5,15 @@ const Dashboard = (() => {
 
   let widgets    = [];
   let editingId  = null;
+  let pages = [
+    { id: 'page_1', name: 'Página 1', icon: 'fa-chart-pie', widgets: [] },
+  ];
+  let activePageIndex = 0;
+  let editingPageIndex = 0;
   const chartMap = {};   // widgetId → Chart instance
   const pageMap  = {};   // widgetId → página atual da tabela
   const renderVersion = {};
-  let sortable   = null;
+  let layoutEventsReady = false;
 
   /* ── Histórico para Undo/Redo ────────────── */
   const historyStack = [];
@@ -16,6 +21,7 @@ const Dashboard = (() => {
   const MAX_HISTORY  = 25;
 
   function pushHistory() {
+    syncCurrentPage();
     historyStack.splice(historyPos + 1);
     historyStack.push(JSON.parse(JSON.stringify(widgets)));
     if (historyStack.length > MAX_HISTORY) historyStack.shift();
@@ -39,6 +45,7 @@ const Dashboard = (() => {
 
   function applyHistoryState(snapshot) {
     widgets = JSON.parse(JSON.stringify(snapshot));
+    syncCurrentPage();
     renderAll();
     syncUndoRedoUI();
     App.renderColumnsList();
@@ -59,6 +66,12 @@ const Dashboard = (() => {
 
   const SIZES = ['sm', 'md', 'lg', 'full'];
   const SIZE_LABELS = { sm: '¼', md: '½', lg: '¾', full: '⬜' };
+  const SIZE_RATIOS = { sm: 0.25, md: 0.5, lg: 0.75, full: 1 };
+  const LAYOUT_GAP = 20;
+  const MIN_WIDGET_WIDTH = 260;
+  const MIN_WIDGET_HEIGHT = 140;
+  const MAX_WIDGET_HEIGHT = 1200;
+  const MAX_PAGES = 5;
 
   /* ── Ícones por tipo ─────────────────────── */
   const TYPE_META = {
@@ -71,7 +84,59 @@ const Dashboard = (() => {
     kpi:      { icon: 'fa-gauge-high',  label: 'Indicador' },
     table:    { icon: 'fa-table',       label: 'Tabela' },
     text:     { icon: 'fa-align-left',  label: 'Texto' },
+    filter:   { icon: 'fa-filter',      label: 'Filtros' },
+    image:    { icon: 'fa-image',       label: 'Imagem / Logo' },
+    button:   { icon: 'fa-link',        label: 'Botão' },
   };
+
+  const TITLE_ICONS = [
+    { value: 'auto', icon: 'fa-wand-magic-sparkles', label: 'Automático' },
+    { value: 'none', icon: 'fa-ban', label: 'Sem ícone' },
+    { value: 'fa-chart-column', icon: 'fa-chart-column', label: 'Gráfico' },
+    { value: 'fa-coins', icon: 'fa-coins', label: 'Valores' },
+    { value: 'fa-dollar-sign', icon: 'fa-dollar-sign', label: 'Financeiro' },
+    { value: 'fa-users', icon: 'fa-users', label: 'Pessoas' },
+    { value: 'fa-user', icon: 'fa-user', label: 'Usuário' },
+    { value: 'fa-calendar-days', icon: 'fa-calendar-days', label: 'Calendário' },
+    { value: 'fa-clock', icon: 'fa-clock', label: 'Tempo' },
+    { value: 'fa-bullseye', icon: 'fa-bullseye', label: 'Meta' },
+    { value: 'fa-trophy', icon: 'fa-trophy', label: 'Resultado' },
+    { value: 'fa-cart-shopping', icon: 'fa-cart-shopping', label: 'Vendas' },
+    { value: 'fa-briefcase', icon: 'fa-briefcase', label: 'Negócios' },
+    { value: 'fa-building', icon: 'fa-building', label: 'Empresa' },
+    { value: 'fa-globe', icon: 'fa-globe', label: 'Global' },
+    { value: 'fa-location-dot', icon: 'fa-location-dot', label: 'Localização' },
+    { value: 'fa-database', icon: 'fa-database', label: 'Dados' },
+    { value: 'fa-bolt', icon: 'fa-bolt', label: 'Destaque' },
+    { value: 'fa-star', icon: 'fa-star', label: 'Favorito' },
+    { value: 'fa-circle-check', icon: 'fa-circle-check', label: 'Concluído' },
+    { value: 'fa-triangle-exclamation', icon: 'fa-triangle-exclamation', label: 'Alerta' },
+    { value: 'fa-lightbulb', icon: 'fa-lightbulb', label: 'Insight' },
+  ];
+  const PAGE_ICONS = TITLE_ICONS.filter(item => !['auto', 'none'].includes(item.value));
+  const BUTTON_ICONS = [
+    { value: 'none', icon: 'fa-ban', label: 'Sem ícone' },
+    { value: 'fa-arrow-right', icon: 'fa-arrow-right', label: 'Avançar' },
+    { value: 'fa-arrow-left', icon: 'fa-arrow-left', label: 'Voltar' },
+    { value: 'fa-link', icon: 'fa-link', label: 'Link' },
+    { value: 'fa-up-right-from-square', icon: 'fa-up-right-from-square', label: 'Externo' },
+    { value: 'fa-house', icon: 'fa-house', label: 'Início' },
+    ...PAGE_ICONS,
+  ];
+
+  function resolveTitleIcon(widget) {
+    const selected = widget.config?.titleIcon ?? 'auto';
+    if (selected === 'none') return '';
+    if (selected === 'auto') return TYPE_META[widget.type]?.icon ?? 'fa-chart-bar';
+    return TITLE_ICONS.some(item => item.value === selected) ? selected : TYPE_META[widget.type]?.icon ?? 'fa-chart-bar';
+  }
+
+  function widgetTitleHTML(widget) {
+    const icon = resolveTitleIcon(widget);
+    return `<i class="fa-solid fa-grip-vertical widget-grip" aria-hidden="true"></i>` +
+      (icon ? `<i class="fa-solid ${icon} widget-title-icon" aria-hidden="true"></i>` : '') +
+      `<span class="widget-title-text">${escHtml(widget.title)}</span>`;
+  }
 
   /* ── Defaults por tipo ───────────────────── */
   function defaultConfig(type, cols, numCols, strCols) {
@@ -80,22 +145,51 @@ const Dashboard = (() => {
     const yCols = numCols.slice(0, 1);
 
     const base = {
+      titleIcon: 'auto',
       xColumn: xCol, yColumns: yCols,
       aggregation: 'sum', limit: 15,
       sortBy: 'value', sortDir: 'desc',
       dateGroup: 'none', showOthers: false,
-      valueFormat: 'number', valueDecimals: 0, currency: 'BRL',
+      valueFormat: 'number', valueDecimals: 0, percentScale: 'direct', currency: 'BRL',
       showLegend: true, showGrid: true,
     };
 
     if (type === 'text') return {
+      titleIcon: 'auto',
       content: '# Título do texto\n\nEscreva **parágrafos**, listas e outros elementos em Markdown.',
       fontSize: 16, fontFamily: 'system', color: '#334155', align: 'left',
       lineHeight: 1.6, background: '#ffffff',
     };
-    if (type === 'kpi')     return { column: yCol, kpiAgg: 'sum', prefix: '', suffix: '', decimals: 0, valueFormat: 'number', valueDecimals: 0, currency: 'BRL', iconClass: 'fa-gauge-high' };
-    if (type === 'table')   return { columns: cols.slice(0, 6), rowLimit: 15 };
-    if (type === 'scatter') return { xColumn: numCols[0] ?? '', yColumns: [numCols[1] ?? numCols[0] ?? ''], limit: 100, showLegend: false };
+    if (type === 'filter') return {
+      titleIcon: 'auto',
+      columns: cols.slice(0, Math.min(5, cols.length)),
+      orientation: 'vertical',
+    };
+    if (type === 'image') return {
+      titleIcon: 'none',
+      source: '',
+      alt: 'Imagem',
+      fit: 'contain',
+      height: 220,
+      background: '#ffffff',
+    };
+    if (type === 'button') return {
+      titleIcon: 'none',
+      label: 'Abrir página',
+      destinationType: 'page',
+      pageId: pages[0]?.id ?? '',
+      url: 'https://',
+      icon: 'fa-arrow-right',
+      background: '#6366f1',
+      textColor: '#ffffff',
+      fontFamily: 'system',
+      fontSize: 16,
+      align: 'center',
+      fullWidth: false,
+    };
+    if (type === 'kpi')     return { titleIcon: 'auto', column: yCol, kpiAgg: 'sum', prefix: '', suffix: '', decimals: 0, valueFormat: 'number', valueDecimals: 0, percentScale: 'direct', currency: 'BRL', iconClass: 'fa-gauge-high' };
+    if (type === 'table')   return { titleIcon: 'auto', columns: cols.slice(0, 6), rowLimit: 15 };
+    if (type === 'scatter') return { titleIcon: 'auto', xColumn: numCols[0] ?? '', yColumns: [numCols[1] ?? numCols[0] ?? ''], limit: 100, showLegend: false };
     if (['pie','doughnut'].includes(type)) return { ...base, limit: 10 };
     return base;
   }
@@ -104,12 +198,12 @@ const Dashboard = (() => {
   function addWidget(type) {
     const st   = App.state;
     const cols = st.columns;
-    if (type !== 'text' && !cols.length) { App.toast('Nenhum dado carregado.', 'error'); return; }
+    if (!['text', 'image', 'button'].includes(type) && !cols.length) { App.toast('Nenhum dado carregado.', 'error'); return; }
 
     const numCols = st.numericColumns;
     const strCols = st.stringColumns;
     const id      = 'w_' + Date.now();
-    const size    = type === 'kpi' ? 'sm' : type === 'table' ? 'lg' : 'md';
+    const size    = ['kpi', 'button'].includes(type) ? 'sm' : type === 'table' ? 'lg' : type === 'filter' ? 'sm' : 'md';
 
     const w = {
       id, type,
@@ -119,8 +213,8 @@ const Dashboard = (() => {
     };
 
     widgets.push(w);
+    placeNewWidget(w);
     renderWidget(w);
-    initSortable();
     updatePlaceholder();
     pushHistory();
     openEditModal(w.id);
@@ -132,25 +226,26 @@ const Dashboard = (() => {
     grid.innerHTML = '';
     Object.values(chartMap).forEach(c => { try { c.destroy(); } catch(_) {} });
     for (const k in chartMap) delete chartMap[k];
+    ensureWidgetLayouts();
     await Promise.all(widgets.map(w => renderWidget(w)));
     updatePlaceholder();
-    initSortable();
+    updateCanvasBounds();
+    initLayoutEvents();
+    renderPageNav();
   }
 
   /* ── Renderizar widget ───────────────────── */
   function renderWidget(w) {
     const grid = document.getElementById('widgets-grid');
     const el   = document.createElement('div');
-    el.className = `widget sz-${w.size}`;
+    el.className = `widget sz-${w.size}${w.type === 'button' ? ' widget-button-floating' : ''}`;
     el.dataset.id = w.id;
-
-    const meta = TYPE_META[w.type] ?? { icon: 'fa-chart-bar', label: w.type };
+    applyWidgetLayout(w, el);
 
     el.innerHTML = `
-      <div class="widget-header">
+      <div class="widget-header" onpointerdown="Dashboard.startDrag(event, '${w.id}')">
         <div class="widget-title widget-drag" title="Arraste para reposicionar: ${escHtml(w.title)}">
-          <i class="fa-solid fa-grip-vertical widget-grip" aria-hidden="true"></i>
-          <i class="fa-solid ${meta.icon}" style="margin-right:6px;opacity:.5;font-size:11px;"></i>${escHtml(w.title)}
+          ${widgetTitleHTML(w)}
         </div>
         <div class="widget-controls">
           <button class="widget-btn resize-btn" onclick="Dashboard.resizeWidget('${w.id}')"
@@ -169,14 +264,222 @@ const Dashboard = (() => {
         </div>
       </div>
       <div class="widget-body" id="wb_${w.id}"></div>
-      <div class="widget-resize-handle" onpointerdown="Dashboard.startResize(event, '${w.id}')" title="Arraste para alterar a largura">
+      <div class="widget-resize-handle" onpointerdown="Dashboard.startResize(event, '${w.id}')" title="Arraste na diagonal para alterar largura e altura">
         <i class="fa-solid fa-grip-lines-vertical"></i>
       </div>
     `;
 
     grid.appendChild(el);
     const rendered = renderWidgetContent(w);
+    Promise.resolve(rendered).finally(updateCanvasBounds);
     return rendered;
+  }
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function getGridWidth() {
+    return Math.max(0, document.getElementById('widgets-grid')?.clientWidth ?? 0);
+  }
+
+  function widthForSize(size, gridWidth = getGridWidth()) {
+    const ratio = SIZE_RATIOS[size] ?? SIZE_RATIOS.md;
+    return clamp(Math.round(gridWidth * ratio - LAYOUT_GAP * (1 - ratio)), Math.min(MIN_WIDGET_WIDTH, gridWidth), gridWidth);
+  }
+
+  function estimatedWidgetHeight(widget) {
+    if (widget.type === 'kpi') return 190;
+    if (widget.type === 'button') return 170;
+    if (widget.type === 'text') return 240;
+    if (widget.type === 'filter') {
+      const fieldCount = Math.max(1, widget.config?.columns?.length ?? 1);
+      return widget.config?.orientation === 'horizontal' ? 230 : Math.min(620, 130 + fieldCount * 66);
+    }
+    if (widget.type === 'image') return Math.max(180, Math.min(860, (Number(widget.config?.height) || 220) + 58));
+    if (widget.type === 'table') return 480;
+    return 390;
+  }
+
+  function minHeightForWidget(widget) {
+    if (widget.type === 'kpi') return 150;
+    if (widget.type === 'button') return 120;
+    if (widget.type === 'filter') return 170;
+    if (widget.type === 'table') return 220;
+    if (['bar', 'line', 'area', 'pie', 'doughnut', 'scatter'].includes(widget.type)) return 240;
+    return MIN_WIDGET_HEIGHT;
+  }
+
+  function ensureWidgetLayouts() {
+    const gridWidth = getGridWidth();
+    if (!gridWidth) return;
+    let cursorX = 0;
+    let cursorY = 0;
+    let rowHeight = 0;
+
+    widgets.forEach(widget => {
+      if (widget.layout && Number.isFinite(widget.layout.x) && Number.isFinite(widget.layout.y) && Number.isFinite(widget.layout.width)) {
+        widget.layout.width = clamp(widget.layout.width, Math.min(MIN_WIDGET_WIDTH, gridWidth), gridWidth);
+        widget.layout.height = clamp(
+          Number.isFinite(widget.layout.height) ? widget.layout.height : estimatedWidgetHeight(widget),
+          minHeightForWidget(widget),
+          MAX_WIDGET_HEIGHT
+        );
+        widget.layout.x = clamp(widget.layout.x, 0, Math.max(0, gridWidth - widget.layout.width));
+        widget.layout.y = Math.max(0, widget.layout.y);
+        return;
+      }
+
+      const width = widthForSize(widget.size, gridWidth);
+      if (cursorX > 0 && cursorX + width > gridWidth) {
+        cursorX = 0;
+        cursorY += rowHeight + LAYOUT_GAP;
+        rowHeight = 0;
+      }
+      const height = estimatedWidgetHeight(widget);
+      widget.layout = { x: cursorX, y: cursorY, width, height };
+      cursorX += width + LAYOUT_GAP;
+      rowHeight = Math.max(rowHeight, height);
+    });
+  }
+
+  function placeNewWidget(widget) {
+    const gridWidth = getGridWidth();
+    if (!gridWidth) return;
+    const width = widthForSize(widget.size, gridWidth);
+    const bottom = widgets
+      .filter(item => item !== widget && item.layout)
+      .reduce((max, item) => {
+        return Math.max(max, item.layout.y + (item.layout.height || estimatedWidgetHeight(item)));
+      }, 0);
+    widget.layout = {
+      x: 0,
+      y: bottom ? bottom + LAYOUT_GAP : 0,
+      width,
+      height: estimatedWidgetHeight(widget),
+    };
+  }
+
+  function applyWidgetLayout(widget, element = document.querySelector(`[data-id="${widget.id}"]`)) {
+    if (!element || !widget.layout) return;
+    element.style.left = `${Math.round(widget.layout.x)}px`;
+    element.style.top = `${Math.round(widget.layout.y)}px`;
+    element.style.width = `${Math.round(widget.layout.width)}px`;
+    element.style.height = `${Math.round(widget.layout.height || estimatedWidgetHeight(widget))}px`;
+  }
+
+  function updateCanvasBounds() {
+    const grid = document.getElementById('widgets-grid');
+    if (!grid) return;
+    if (window.matchMedia('(max-width: 768px)').matches) {
+      grid.style.height = 'auto';
+      return;
+    }
+    let bottom = MIN_WIDGET_HEIGHT;
+    grid.querySelectorAll(':scope > .widget').forEach(element => {
+      const widget = widgets.find(item => item.id === element.dataset.id);
+      if (!widget?.layout) return;
+      bottom = Math.max(bottom, widget.layout.y + (widget.layout.height || element.offsetHeight));
+    });
+    grid.style.height = `${Math.ceil(bottom + LAYOUT_GAP)}px`;
+  }
+
+  function updateSizeButton(widget, element = document.querySelector(`[data-id="${widget.id}"]`)) {
+    const button = element?.querySelector('.resize-btn');
+    if (!button) return;
+    button.title = `Tamanho: ${widget.size}`;
+    button.dataset.size = widget.size;
+    button.querySelector('.size-label').textContent = SIZE_LABELS[widget.size] ?? '½';
+  }
+
+  function syncSizeFromWidth(widget) {
+    const gridWidth = getGridWidth();
+    if (!gridWidth) return;
+    const ratio = widget.layout.width / gridWidth;
+    widget.size = SIZES.reduce((closest, size) =>
+      Math.abs(SIZE_RATIOS[size] - ratio) < Math.abs(SIZE_RATIOS[closest] - ratio) ? size : closest
+    , 'md');
+  }
+
+  function initLayoutEvents() {
+    if (layoutEventsReady) return;
+    layoutEventsReady = true;
+    let timer;
+    window.addEventListener('resize', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const gridWidth = getGridWidth();
+        if (!gridWidth) return;
+        widgets.forEach(widget => {
+          if (!widget.layout) return;
+          widget.layout.width = clamp(widget.layout.width, Math.min(MIN_WIDGET_WIDTH, gridWidth), gridWidth);
+          widget.layout.x = clamp(widget.layout.x, 0, Math.max(0, gridWidth - widget.layout.width));
+          applyWidgetLayout(widget);
+        });
+        updateCanvasBounds();
+      }, 100);
+    });
+  }
+
+  /* ── Movimento livre pelo cabeçalho ─────── */
+  function startDrag(e, id) {
+    if (e.button !== 0 || e.target.closest('.widget-controls')) return;
+    const element = document.querySelector(`[data-id="${id}"]`);
+    const widget = widgets.find(item => item.id === id);
+    const grid = document.getElementById('widgets-grid');
+    const canvas = document.getElementById('dash-canvas');
+    if (!element || !widget?.layout || !grid) return;
+
+    e.preventDefault();
+    const header = e.currentTarget;
+    const origin = { ...widget.layout };
+    const pointer = { x: e.clientX, y: e.clientY };
+    let moved = false;
+
+    element.classList.add('dragging-free');
+    grid.classList.add('is-dragging');
+    document.body.classList.add('dashboard-dragging');
+    header.setPointerCapture?.(e.pointerId);
+
+    function onMove(event) {
+      const dx = event.clientX - pointer.x;
+      const dy = event.clientY - pointer.y;
+      const maxX = Math.max(0, grid.clientWidth - widget.layout.width);
+      widget.layout.x = clamp(origin.x + dx, 0, maxX);
+      widget.layout.y = Math.max(0, origin.y + dy);
+      moved ||= Math.abs(dx) > 2 || Math.abs(dy) > 2;
+      applyWidgetLayout(widget, element);
+      updateCanvasBounds();
+
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        if (event.clientY > rect.bottom - 45) canvas.scrollTop += 14;
+        else if (event.clientY < rect.top + 45) canvas.scrollTop -= 14;
+      }
+    }
+
+    function finish(event, cancelled = false) {
+      if (cancelled) {
+        widget.layout = origin;
+        applyWidgetLayout(widget, element);
+      }
+      element.classList.remove('dragging-free');
+      grid.classList.remove('is-dragging');
+      document.body.classList.remove('dashboard-dragging');
+      header.releasePointerCapture?.(event.pointerId);
+      header.removeEventListener('pointermove', onMove);
+      header.removeEventListener('pointerup', onUp);
+      header.removeEventListener('pointercancel', onCancel);
+      updateCanvasBounds();
+      if (!cancelled && moved) pushHistory();
+    }
+
+    function onUp(event) { finish(event); }
+    function onCancel(event) { finish(event, true); }
+
+    header.addEventListener('pointermove', onMove);
+    header.addEventListener('pointerup', onUp);
+    header.addEventListener('pointercancel', onCancel);
   }
 
   /* ── Resize por botão (ciclo de tamanhos) ── */
@@ -187,15 +490,13 @@ const Dashboard = (() => {
     w.size = SIZES[(idx + 1) % SIZES.length];
 
     const el = document.querySelector(`[data-id="${id}"]`);
-    if (el) {
-      el.className = el.className.replace(/sz-\w+/, '').trim() + ` sz-${w.size}`;
-      const btn = el.querySelector('.resize-btn');
-      if (btn) {
-        btn.title = `Tamanho: ${w.size}`;
-        btn.dataset.size = w.size;
-        btn.querySelector('.size-label').textContent = SIZE_LABELS[w.size];
-      }
-    }
+    const gridWidth = getGridWidth();
+    w.layout ??= { x: 0, y: 0, width: widthForSize(w.size, gridWidth), height: estimatedWidgetHeight(w) };
+    w.layout.width = widthForSize(w.size, gridWidth);
+    w.layout.x = clamp(w.layout.x, 0, Math.max(0, gridWidth - w.layout.width));
+    applyWidgetLayout(w, el);
+    updateSizeButton(w, el);
+    updateCanvasBounds();
     // Re-renderiza chart para ajustar ao novo tamanho
     setTimeout(() => { renderWidgetContent(w); pushHistory(); }, 50);
     App.toast(`Widget → ${({sm:'Pequeno',md:'Médio',lg:'Grande',full:'Completo'})[w.size]}`);
@@ -207,53 +508,39 @@ const Dashboard = (() => {
     e.stopPropagation();
     const el = document.querySelector(`[data-id="${id}"]`);
     const w = widgets.find(x => x.id === id);
-    if (!el || !w) return;
+    if (!el || !w?.layout) return;
 
     const grid = document.getElementById('widgets-grid');
-    const spans = [3, 6, 9, 12];
     const handle = e.currentTarget;
+    const originalLayout = { ...w.layout };
     const originalSize = w.size;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const originalHeight = Number(w.layout.height) || el.offsetHeight || estimatedWidgetHeight(w);
 
     el.classList.add('resizing');
-    el.dataset.resizeLabel = `${spans[SIZES.indexOf(w.size)]}/12`;
+    el.dataset.resizeLabel = `${Math.round(w.layout.width)} × ${Math.round(originalHeight)} px`;
     grid.classList.add('is-resizing');
     handle.setPointerCapture?.(e.pointerId);
 
     function onMove(ev) {
-      const gridRect = grid.getBoundingClientRect();
-      const elRect = el.getBoundingClientRect();
-      const desiredWidth = Math.max(1, ev.clientX - elRect.left);
-      const desiredSpan = Math.max(3, Math.min(12, Math.round((desiredWidth / gridRect.width) * 12)));
-      let newIdx = 0;
-      for (let i = 1; i < spans.length; i++) {
-        if (Math.abs(spans[i] - desiredSpan) < Math.abs(spans[newIdx] - desiredSpan)) newIdx = i;
-      }
-      const newSize = SIZES[newIdx];
-      if (newSize !== w.size) {
-        const positions = captureGridPositions();
-        w.size = newSize;
-        el.className = el.className.replace(/sz-\w+/, '').trim() + ` sz-${newSize}`;
-        el.dataset.resizeLabel = `${spans[newIdx]}/12`;
-        animateGridFrom(positions, el);
-        const btn = el.querySelector('.resize-btn');
-        if (btn) {
-          btn.title = `Tamanho: ${newSize}`;
-          btn.dataset.size = newSize;
-          btn.querySelector('.size-label').textContent = SIZE_LABELS[newSize];
-        }
-      }
+      const minWidth = Math.min(MIN_WIDGET_WIDTH, grid.clientWidth);
+      const maxWidth = Math.max(minWidth, grid.clientWidth - w.layout.x);
+      w.layout.width = clamp(originalLayout.width + ev.clientX - startX, minWidth, maxWidth);
+      w.layout.height = clamp(originalHeight + ev.clientY - startY, minHeightForWidget(w), MAX_WIDGET_HEIGHT);
+      syncSizeFromWidth(w);
+      applyWidgetLayout(w, el);
+      updateSizeButton(w, el);
+      el.dataset.resizeLabel = `${Math.round(w.layout.width)} × ${Math.round(w.layout.height)} px`;
+      updateCanvasBounds();
     }
 
     function finish(ev, cancelled = false) {
       if (cancelled) {
+        w.layout = originalLayout;
         w.size = originalSize;
-        el.className = el.className.replace(/sz-\w+/, '').trim() + ` sz-${originalSize}`;
-        const btn = el.querySelector('.resize-btn');
-        if (btn) {
-          btn.title = `Tamanho: ${originalSize}`;
-          btn.dataset.size = originalSize;
-          btn.querySelector('.size-label').textContent = SIZE_LABELS[originalSize];
-        }
+        applyWidgetLayout(w, el);
+        updateSizeButton(w, el);
       }
       el.classList.remove('resizing');
       grid.classList.remove('is-resizing');
@@ -262,7 +549,9 @@ const Dashboard = (() => {
       handle.removeEventListener('pointermove', onMove);
       handle.removeEventListener('pointerup', onUp);
       handle.removeEventListener('pointercancel', onCancel);
-      if (!cancelled && w.size !== originalSize) {
+      const widthChanged = Math.round(w.layout.width) !== Math.round(originalLayout.width);
+      const heightChanged = Math.round(w.layout.height) !== Math.round(originalHeight);
+      if (!cancelled && (widthChanged || heightChanged)) {
         setTimeout(() => { renderWidgetContent(w); pushHistory(); }, 80);
       }
     }
@@ -273,30 +562,6 @@ const Dashboard = (() => {
     handle.addEventListener('pointermove', onMove);
     handle.addEventListener('pointerup', onUp);
     handle.addEventListener('pointercancel', onCancel);
-  }
-
-  function captureGridPositions() {
-    const positions = new Map();
-    document.querySelectorAll('#widgets-grid > .widget').forEach(node => {
-      positions.set(node, node.getBoundingClientRect());
-    });
-    return positions;
-  }
-
-  function animateGridFrom(positions, excluded) {
-    requestAnimationFrame(() => {
-      positions.forEach((before, node) => {
-        if (node === excluded || !node.isConnected) return;
-        const after = node.getBoundingClientRect();
-        const dx = before.left - after.left;
-        const dy = before.top - after.top;
-        if (!dx && !dy) return;
-        node.animate(
-          [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0, 0)' }],
-          { duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' }
-        );
-      });
-    });
   }
 
   /* ── Preparação para exportação PDF ─────── */
@@ -314,8 +579,10 @@ const Dashboard = (() => {
       // Forçar largura completa no DOM temporariamente
       const el = document.querySelector(`[data-id="${w.id}"]`);
       if (el) {
-        el.dataset.origSize = w.size;
-        el.className = el.className.replace(/sz-\w+/, '').trim() + ' sz-full';
+        el.dataset.origLayout = JSON.stringify(w.layout ?? {});
+        el.style.left = '0px';
+        el.style.width = `${grid.clientWidth}px`;
+        el.style.height = 'auto';
       }
     });
 
@@ -330,7 +597,7 @@ const Dashboard = (() => {
   // Renderiza tabela completa sem paginação (só para uso interno/PDF)
   function renderTableFull(body, w, rows) {
     const cfg     = w.config;
-    const cols    = (cfg.columns && cfg.columns.length) ? cfg.columns : App.state.columns.slice(0, 6);
+    const cols    = configuredTableColumns(cfg);
     const numCols = new Set(App.state.numericColumns);
 
     let html = `<div class="widget-table-wrap" style="max-height:none;">
@@ -341,7 +608,7 @@ const Dashboard = (() => {
     rows.forEach(r => {
       html += '<tr>';
       cols.forEach(c => {
-        const v   = r[c] ?? '';
+        const v   = formatTableValue(r[c], c);
         const cls = numCols.has(c) ? ' class="num"' : '';
         html += `<td${cls}>${escHtml(String(v))}</td>`;
       });
@@ -362,21 +629,16 @@ const Dashboard = (() => {
     widgets.forEach(w => {
       if (w.type !== 'table') return;
       const el = document.querySelector(`[data-id="${w.id}"]`);
-      if (el && el.dataset.origSize) {
-        el.className = el.className.replace(/sz-\w+/, '').trim() + ` sz-${el.dataset.origSize}`;
-        delete el.dataset.origSize;
+      if (el && el.dataset.origLayout) {
+        applyWidgetLayout(w, el);
+        delete el.dataset.origLayout;
       }
     });
     // Re-renderiza widgets de tabela com paginação normal de volta
     widgets.forEach(w => {
       if (w.type === 'table') renderWidgetContent(w);
     });
-    // Restaura ordem original dos elementos no grid
-    const grid = document.getElementById('widgets-grid');
-    widgets.forEach(w => {
-      const el = document.querySelector(`[data-id="${w.id}"]`);
-      if (el) grid.appendChild(el);
-    });
+    updateCanvasBounds();
   }
   async function renderWidgetContent(w) {
     const body = document.getElementById(`wb_${w.id}`);
@@ -387,6 +649,24 @@ const Dashboard = (() => {
 
     if (w.type === 'text') {
       renderTextWidget(body, w);
+      return;
+    }
+    if (w.type === 'image') {
+      renderImageWidget(body, w);
+      return;
+    }
+    if (w.type === 'button') {
+      renderButtonWidget(body, w);
+      return;
+    }
+    if (w.type === 'filter') {
+      await renderFilterWidget(body, w);
+      return;
+    }
+
+    const configError = validateWidgetColumns(w);
+    if (configError) {
+      renderWidgetError(body, configError);
       return;
     }
 
@@ -401,7 +681,9 @@ const Dashboard = (() => {
         if (w.type === 'kpi') {
           const [current, total] = await Promise.all([
             App.queryKPI(w.config),
-            (App.state.activeFilter || App.state.crossFilter) ? App.queryKPI(w.config, true) : Promise.resolve(null),
+            (App.state.activeFilter || Object.keys(App.state.widgetFilters).length || App.state.crossFilter)
+              ? App.queryKPI(w.config, true)
+              : Promise.resolve(null),
           ]);
           if (renderVersion[w.id] !== version) return;
           renderQueryKPI(body, w, current, total);
@@ -475,6 +757,112 @@ const Dashboard = (() => {
     body.innerHTML = `<div class="markdown-widget" style="font-family:${fontFamilies[cfg.fontFamily] ?? fontFamilies.system};font-size:${fontSize}px;line-height:${lineHeight};text-align:${align};color:${color};background:${background}">${MarkdownRenderer.render(cfg.content ?? '')}</div>`;
   }
 
+  function safeImageSource(value) {
+    const source = String(value ?? '').trim();
+    if (!source) return '';
+    if (/^data:image\/(?:png|jpe?g|gif|webp|svg\+xml);base64,/i.test(source)) return source;
+    if (/^(https?:\/\/|blob:|\/|\.{0,2}\/)/i.test(source)) return source;
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(source)) return source;
+    return '';
+  }
+
+  function readImageFile(file) {
+    return new Promise((resolve, reject) => {
+      if (!file) { resolve(''); return; }
+      if (!file.type.startsWith('image/')) { reject(new Error('Arquivo inválido')); return; }
+      if (file.size > 3 * 1024 * 1024) { reject(new Error('A imagem deve ter no máximo 3 MB')); return; }
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.onerror = () => reject(new Error('Não foi possível ler a imagem'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function renderImageWidget(body, w) {
+    const cfg = w.config ?? {};
+    const source = safeImageSource(cfg.source);
+    const fit = ['contain', 'cover', 'fill'].includes(cfg.fit) ? cfg.fit : 'contain';
+    const background = /^#[0-9a-f]{6}$/i.test(cfg.background ?? '') ? cfg.background : '#ffffff';
+    if (!source) {
+      body.innerHTML = `<div class="image-widget-empty">
+        <i class="fa-solid fa-image"></i>
+        <span>Adicione uma imagem ou logo</span>
+      </div>`;
+      return;
+    }
+    body.innerHTML = `<div class="image-widget" style="background:${background}">
+      <img src="${escHtml(source)}" alt="${escHtml(cfg.alt ?? 'Imagem')}" style="object-fit:${fit}">
+    </div>`;
+  }
+
+  function normalizeExternalUrl(value) {
+    const raw = String(value ?? '').trim();
+    if (!raw || raw === 'https://') return '';
+    const candidate = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
+    return /^(https?:|mailto:)/i.test(candidate) ? candidate : '';
+  }
+
+  function renderButtonWidget(body, w) {
+    const cfg = w.config ?? {};
+    const background = /^#[0-9a-f]{6}$/i.test(cfg.background ?? '') ? cfg.background : '#6366f1';
+    const textColor = /^#[0-9a-f]{6}$/i.test(cfg.textColor ?? '') ? cfg.textColor : '#ffffff';
+    const fontSize = Math.max(10, Math.min(42, Number(cfg.fontSize) || 16));
+    const fontFamilies = {
+      system: "'Segoe UI', system-ui, sans-serif",
+      serif: "Georgia, 'Times New Roman', serif",
+      modern: "Arial, Helvetica, sans-serif",
+      mono: "'Courier New', monospace",
+    };
+    const align = ['left', 'center', 'right'].includes(cfg.align) ? cfg.align : 'center';
+    const icon = BUTTON_ICONS.some(item => item.value === cfg.icon) && cfg.icon !== 'none'
+      ? `<i class="fa-solid ${cfg.icon}"></i>`
+      : '';
+    const style = `background:${background};color:${textColor};font-size:${fontSize}px;font-family:${fontFamilies[cfg.fontFamily] ?? fontFamilies.system}`;
+    const content = `${icon}<span>${escHtml(cfg.label ?? 'Abrir')}</span>`;
+    let control;
+    if (cfg.destinationType === 'external') {
+      const url = normalizeExternalUrl(cfg.url);
+      control = url
+        ? `<a class="dashboard-link-button ${cfg.fullWidth ? 'full' : ''}" href="${escHtml(url)}" target="_blank" rel="noopener noreferrer" style="${style}">${content}</a>`
+        : `<button class="dashboard-link-button ${cfg.fullWidth ? 'full' : ''}" disabled style="${style}">${content}</button>`;
+    } else {
+      const targetExists = pages.some(page => page.id === cfg.pageId);
+      control = `<button class="dashboard-link-button ${cfg.fullWidth ? 'full' : ''}" ${targetExists ? `onclick="Dashboard.switchPageById('${escHtml(escJs(cfg.pageId))}')"` : 'disabled'} style="${style}">${content}</button>`;
+    }
+    body.innerHTML = `<div class="button-widget-align ${align}">${control}</div>`;
+  }
+
+  async function renderFilterWidget(body, w) {
+    const cfg = w.config ?? {};
+    const columns = (cfg.columns ?? []).filter(column => App.state.columns.includes(column));
+    const orientation = cfg.orientation === 'horizontal' ? 'horizontal' : 'vertical';
+    if (!columns.length) {
+      renderWidgetError(body, 'Selecione ao menos uma coluna para filtrar');
+      return;
+    }
+    const optionGroups = await Promise.all(columns.map(column => App.getDistinctValues(column)));
+    const selected = App.state.widgetFilters[w.id] ?? {};
+    const controls = columns.map((column, index) => {
+      const options = optionGroups[index].map(value => {
+        const stringValue = String(value ?? '');
+        return `<option value="${escHtml(stringValue)}" ${String(selected[column] ?? '') === stringValue ? 'selected' : ''}>${escHtml(stringValue)}</option>`;
+      }).join('');
+      return `<label class="filter-widget-field">
+        <span>${escHtml(column)}</span>
+        <select class="form-control" onchange="App.setWidgetFilter('${w.id}','${escHtml(escJs(column))}',this.value)">
+          <option value="">Todos</option>
+          ${options}
+        </select>
+      </label>`;
+    }).join('');
+    body.innerHTML = `<div class="filter-widget ${orientation}">
+      <div class="filter-widget-controls">${controls}</div>
+      <button class="filter-widget-clear" onclick="App.clearWidgetFilters('${w.id}')">
+        <i class="fa-solid fa-eraser"></i> Limpar filtros
+      </button>
+    </div>`;
+  }
+
   function renderWidgetError(body, message) {
     body.innerHTML = `<div style="color:#94a3b8;font-size:13px;padding:20px;text-align:center;">
       <i class="fa-solid fa-triangle-exclamation" style="display:block;font-size:28px;margin-bottom:8px;opacity:.4;"></i>
@@ -482,10 +870,52 @@ const Dashboard = (() => {
     </div>`;
   }
 
+  function validateWidgetColumns(widget) {
+    const available = new Set(App.state.columns);
+    const numeric = new Set(App.state.numericColumns);
+    const cfg = widget.config ?? {};
+    if (['image', 'text', 'button'].includes(widget.type)) return '';
+    if (widget.type === 'filter') {
+      return (cfg.columns ?? []).some(column => available.has(column))
+        ? ''
+        : 'Selecione ao menos uma coluna válida para filtrar';
+    }
+    if (widget.type === 'kpi') {
+      return numeric.has(cfg.column) ? '' : 'Selecione uma coluna numérica válida para o indicador';
+    }
+    if (widget.type === 'table') return '';
+    if (widget.type === 'scatter') {
+      return numeric.has(cfg.xColumn) && numeric.has(cfg.yColumns?.[0])
+        ? ''
+        : 'Selecione duas colunas numéricas válidas para a dispersão';
+    }
+    if (!available.has(cfg.xColumn)) return 'Selecione uma coluna válida para as categorias';
+    if (!(cfg.yColumns ?? []).length || cfg.yColumns.some(col => !numeric.has(col))) {
+      return 'Selecione ao menos uma coluna numérica válida';
+    }
+    return '';
+  }
+
+  function configuredTableColumns(config) {
+    const available = new Set(App.state.columns);
+    const selected = (config.columns ?? []).filter(col => available.has(col));
+    return selected.length ? selected : App.state.columns.slice(0, 6);
+  }
+
+  function formatTableValue(value, column) {
+    const type = App.state.columnConfig[column] ?? App.state.columnTypes[column];
+    if (type === 'date') {
+      const date = ExcelParser.parseDateValue(value);
+      if (date) return date.toLocaleDateString('pt-BR');
+    }
+    return String(value ?? '');
+  }
+
   function renderQueryKPI(body, w, current, total) {
     const cfg = w.config;
     const value = current.value === null ? null : Number(current.value);
-    const fmt = value !== null ? Charts.formatValue(value, { valueFormat: cfg.valueFormat ?? 'number', valueDecimals: cfg.valueDecimals ?? cfg.decimals ?? 0, currency: cfg.currency ?? 'BRL' }) : '—';
+    const fmt = value !== null ? Charts.formatValue(value, cfg) : '—';
+    const suffix = cfg.valueFormat === 'percent' && String(cfg.suffix ?? '').trim() === '%' ? '' : cfg.suffix;
     let trendHTML = '';
     const totalValue = total?.value === null || total?.value === undefined ? null : Number(total.value);
     if (totalValue && value !== null && totalValue !== value) {
@@ -500,7 +930,7 @@ const Dashboard = (() => {
     const labels = { sum: 'Soma', avg: 'Média', count: 'Contagem', max: 'Máximo', min: 'Mínimo' };
     body.innerHTML = `
       <div class="kpi-card">
-        <div class="kpi-value">${escHtml(cfg.prefix)}${fmt}${escHtml(cfg.suffix)}</div>
+        <div class="kpi-value">${escHtml(cfg.prefix)}${fmt}${escHtml(suffix)}</div>
         <div class="kpi-label">${escHtml(cfg.column)}</div>
         ${trendHTML}
         <div class="kpi-sub">${labels[cfg.kpiAgg] ?? ''} · ${current.rows.toLocaleString('pt-BR')} linhas</div>
@@ -519,7 +949,7 @@ const Dashboard = (() => {
       html += '<tr>';
       result.columns.forEach(col => {
         const cls = numCols.has(col) ? ' class="num"' : '';
-        html += `<td${cls}>${escHtml(String(row[col] ?? ''))}</td>`;
+        html += `<td${cls}>${escHtml(formatTableValue(row[col], col))}</td>`;
       });
       html += '</tr>';
     });
@@ -541,11 +971,12 @@ const Dashboard = (() => {
   function renderKPI(body, w, rows) {
     const cfg = w.config;
     const val = Charts.calcKPI(rows, cfg.column, cfg.kpiAgg);
-    const fmt = val !== null ? Charts.formatValue(val, { valueFormat: cfg.valueFormat ?? 'number', valueDecimals: cfg.valueDecimals ?? cfg.decimals ?? 0, currency: cfg.currency ?? 'BRL' }) : '—';
+    const fmt = val !== null ? Charts.formatValue(val, cfg) : '—';
+    const suffix = cfg.valueFormat === 'percent' && String(cfg.suffix ?? '').trim() === '%' ? '' : cfg.suffix;
 
     // Trend: mostra delta vs total quando filtro ou filtro cruzado está ativo
     let trendHTML = '';
-    const hasFilter = App.state.activeFilter || App.state.crossFilter;
+    const hasFilter = App.state.activeFilter || Object.keys(App.state.widgetFilters).length || App.state.crossFilter;
     if (hasFilter && val !== null) {
       const totalVal = Charts.calcKPI(App.state.rows, cfg.column, cfg.kpiAgg);
       if (totalVal && totalVal !== 0 && totalVal !== val) {
@@ -562,7 +993,7 @@ const Dashboard = (() => {
     const aggLabels = { sum: 'Soma', avg: 'Média', count: 'Contagem', max: 'Máximo', min: 'Mínimo' };
     body.innerHTML = `
       <div class="kpi-card">
-        <div class="kpi-value">${escHtml(cfg.prefix)}${fmt}${escHtml(cfg.suffix)}</div>
+        <div class="kpi-value">${escHtml(cfg.prefix)}${fmt}${escHtml(suffix)}</div>
         <div class="kpi-label">${escHtml(cfg.column)}</div>
         ${trendHTML}
         <div class="kpi-sub">${aggLabels[cfg.kpiAgg] ?? ''} · ${rows.length} linhas</div>
@@ -572,7 +1003,7 @@ const Dashboard = (() => {
 
   function renderTable(body, w, rows) {
     const cfg      = w.config;
-    const cols     = (cfg.columns && cfg.columns.length) ? cfg.columns : App.state.columns.slice(0, 6);
+    const cols     = configuredTableColumns(cfg);
     const rowLimit = cfg.rowLimit ?? 15;
     const numCols  = new Set(App.state.numericColumns);
     const total    = rows.length;
@@ -588,7 +1019,7 @@ const Dashboard = (() => {
     pageRows.forEach(r => {
       html += '<tr>';
       cols.forEach(c => {
-        const v   = r[c] ?? '';
+        const v   = formatTableValue(r[c], c);
         const cls = numCols.has(c) ? ' class="num"' : '';
         html += `<td${cls}>${escHtml(String(v))}</td>`;
       });
@@ -642,56 +1073,6 @@ const Dashboard = (() => {
     if (body) renderTable(body, w, rows);
   }
 
-  /* ── Sortable ────────────────────────────── */
-  function initSortable() {
-    const grid = document.getElementById('widgets-grid');
-    if (sortable) { try { sortable.destroy(); } catch(_) {} }
-    sortable = Sortable.create(grid, {
-      animation: 220,
-      easing: 'cubic-bezier(.2,.8,.2,1)',
-      ghostClass: 'sortable-ghost',
-      chosenClass: 'sortable-chosen',
-      dragClass: 'sortable-drag',
-      fallbackClass: 'sortable-fallback',
-      handle: '.widget-header',
-      filter: '.widget-controls, .widget-controls *, .widget-resize-handle',
-      preventOnFilter: false,
-      forceFallback: true,
-      fallbackOnBody: true,
-      fallbackTolerance: 4,
-      swapThreshold: 0.62,
-      invertSwap: true,
-      invertedSwapThreshold: 0.72,
-      scroll: true,
-      scrollSensitivity: 90,
-      scrollSpeed: 16,
-      bubbleScroll: true,
-      onChoose(evt) {
-        evt.item.classList.add('is-picked-up');
-      },
-      onStart(evt) {
-        grid.classList.add('is-dragging');
-        document.body.classList.add('dashboard-dragging');
-        evt.item.setAttribute('aria-grabbed', 'true');
-      },
-      onEnd(evt) {
-        grid.classList.remove('is-dragging');
-        document.body.classList.remove('dashboard-dragging');
-        evt.item.classList.remove('is-picked-up');
-        evt.item.setAttribute('aria-grabbed', 'false');
-        const ids = [...grid.querySelectorAll('.widget')].map(el => el.dataset.id);
-        widgets.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
-        if (evt.oldIndex !== evt.newIndex) pushHistory();
-      },
-      onUnchoose(evt) {
-        grid.classList.remove('is-dragging');
-        document.body.classList.remove('dashboard-dragging');
-        evt.item.classList.remove('is-picked-up');
-        evt.item.setAttribute('aria-grabbed', 'false');
-      },
-    });
-  }
-
   /* ── Modal de edição ─────────────────────── */
   function openEditModal(id) {
     editingId = id;
@@ -732,6 +1113,16 @@ const Dashboard = (() => {
         <label class="size-opt-label" for="sz${i}">${labels[s]}</label>`;
     }).join('');
 
+    const iconOpts = (current) => TITLE_ICONS.map(item => `
+      <label class="icon-opt" title="${item.label}">
+        <input type="radio" name="w-title-icon" value="${item.value}" ${(current ?? 'auto') === item.value ? 'checked' : ''}>
+        <span>
+          <i class="fa-solid ${item.icon}"></i>
+          <small>${item.label}</small>
+        </span>
+      </label>
+    `).join('');
+
     const toggleRow = (id, label, checked) => `
       <label class="toggle-wrap">
         <span class="toggle"><input type="checkbox" id="${id}" ${checked?'checked':''}><span class="toggle-slider"></span></span>
@@ -757,6 +1148,10 @@ const Dashboard = (() => {
           <div class="form-group full">
             <label class="form-label">Título</label>
             <input id="w-title" class="form-control" type="text" value="${escHtml(w.title)}" placeholder="Título do widget">
+          </div>
+          <div class="form-group full">
+            <label class="form-label">Ícone ao lado do título</label>
+            <div class="icon-picker">${iconOpts(cfg.titleIcon)}</div>
           </div>
           <div class="form-group full">
             <label class="form-label">Tamanho</label>
@@ -804,6 +1199,141 @@ const Dashboard = (() => {
       return html;
     }
 
+    if (w.type === 'button') {
+      const buttonIconOpts = BUTTON_ICONS.map(item => `
+        <label class="icon-opt" title="${item.label}">
+          <input type="radio" name="w-button-icon" value="${item.value}" ${(cfg.icon ?? 'fa-arrow-right') === item.value ? 'checked' : ''}>
+          <span><i class="fa-solid ${item.icon}"></i><small>${item.label}</small></span>
+        </label>
+      `).join('');
+      html += `
+        <div class="form-section">
+          <div class="form-section-title">Conteúdo do botão</div>
+          <div class="form-grid">
+            <div class="form-group full">
+              <label class="form-label">Texto</label>
+              <input id="w-button-label" class="form-control" type="text" value="${escHtml(cfg.label ?? 'Abrir página')}" maxlength="60">
+            </div>
+            <div class="form-group full">
+              <label class="form-label">Ícone do botão</label>
+              <div class="icon-picker">${buttonIconOpts}</div>
+            </div>
+          </div>
+        </div>
+        <div class="form-section">
+          <div class="form-section-title">Destino</div>
+          <div class="form-grid">
+            <div class="form-group full">
+              <label class="form-label">Tipo de link</label>
+              <select id="w-button-destination" class="form-control" onchange="Dashboard.toggleButtonDestinationFields()">
+                <option value="page" ${(cfg.destinationType ?? 'page') === 'page' ? 'selected' : ''}>Página deste dashboard</option>
+                <option value="external" ${cfg.destinationType === 'external' ? 'selected' : ''}>Link externo</option>
+              </select>
+            </div>
+            <div class="form-group full" id="w-button-page-group">
+              <label class="form-label">Página de destino</label>
+              <select id="w-button-page" class="form-control">
+                ${pages.map(page => `<option value="${escHtml(page.id)}" ${cfg.pageId === page.id ? 'selected' : ''}>${escHtml(page.name)}</option>`).join('')}
+              </select>
+            </div>
+            <div class="form-group full" id="w-button-url-group">
+              <label class="form-label">Endereço externo</label>
+              <input id="w-button-url" class="form-control" type="text" value="${escHtml(cfg.url ?? 'https://')}" placeholder="https://exemplo.com">
+            </div>
+          </div>
+        </div>
+        <div class="form-section">
+          <div class="form-section-title">Aparência</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">Cor do botão</label>
+              <input id="w-button-bg" class="form-control color-control" type="color" value="${escHtml(cfg.background ?? '#6366f1')}">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Cor da fonte</label>
+              <input id="w-button-text-color" class="form-control color-control" type="color" value="${escHtml(cfg.textColor ?? '#ffffff')}">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Fonte</label>
+              <select id="w-button-font" class="form-control">
+                <option value="system" ${(cfg.fontFamily ?? 'system') === 'system' ? 'selected' : ''}>Sistema</option>
+                <option value="modern" ${cfg.fontFamily === 'modern' ? 'selected' : ''}>Arial</option>
+                <option value="serif" ${cfg.fontFamily === 'serif' ? 'selected' : ''}>Serifada</option>
+                <option value="mono" ${cfg.fontFamily === 'mono' ? 'selected' : ''}>Monoespaçada</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Tamanho da fonte</label>
+              <input id="w-button-font-size" class="form-control" type="number" min="10" max="42" value="${cfg.fontSize ?? 16}">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Alinhamento</label>
+              <select id="w-button-align" class="form-control">
+                <option value="left" ${cfg.align === 'left' ? 'selected' : ''}>Esquerda</option>
+                <option value="center" ${(cfg.align ?? 'center') === 'center' ? 'selected' : ''}>Centro</option>
+                <option value="right" ${cfg.align === 'right' ? 'selected' : ''}>Direita</option>
+              </select>
+            </div>
+            <div class="form-group">
+              ${toggleRow('w-button-full', 'Ocupar toda a largura', cfg.fullWidth ?? false)}
+            </div>
+          </div>
+        </div>`;
+      setTimeout(toggleButtonDestinationFields, 0);
+      return html;
+    }
+
+    if (w.type === 'image') {
+      const urlValue = /^data:/i.test(cfg.source ?? '') ? '' : cfg.source ?? '';
+      html += `
+        <div class="form-section">
+          <div class="form-section-title">Imagem ou logo</div>
+          <div class="form-grid">
+            <div class="form-group full">
+              <label class="form-label">Enviar arquivo</label>
+              <input id="w-image-file" class="form-control" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml">
+            </div>
+            <div class="form-group full">
+              <label class="form-label">Ou usar URL da imagem</label>
+              <input id="w-image-url" class="form-control" type="url" value="${escHtml(urlValue)}" placeholder="https://...">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Texto alternativo</label>
+              <input id="w-image-alt" class="form-control" type="text" value="${escHtml(cfg.alt ?? 'Imagem')}">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Ajuste</label>
+              <select id="w-image-fit" class="form-control">
+                <option value="contain" ${cfg.fit==='contain'?'selected':''}>Conter sem cortar</option>
+                <option value="cover" ${cfg.fit==='cover'?'selected':''}>Preencher e cortar</option>
+                <option value="fill" ${cfg.fit==='fill'?'selected':''}>Esticar</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Cor de fundo</label>
+              <input id="w-image-bg" class="form-control color-control" type="color" value="${escHtml(cfg.background ?? '#ffffff')}">
+            </div>
+          </div>
+        </div>`;
+      return html;
+    }
+
+    if (w.type === 'filter') {
+      html += `
+        <div class="form-section">
+          <div class="form-section-title">Campos de filtro</div>
+          ${selCol(cols, cfg.columns ?? [], 'w-filter-cols', true)}
+        </div>
+        <div class="form-section">
+          <div class="form-section-title">Organização dos campos</div>
+          <select id="w-filter-orientation" class="form-control">
+            <option value="vertical" ${(cfg.orientation ?? 'vertical') === 'vertical' ? 'selected' : ''}>Vertical — um abaixo do outro</option>
+            <option value="horizontal" ${cfg.orientation === 'horizontal' ? 'selected' : ''}>Adaptável — cria colunas ao esticar</option>
+          </select>
+        </div>`;
+      return html;
+    }
+
     // ── KPI
     if (w.type === 'kpi') {
       html += `
@@ -820,8 +1350,8 @@ const Dashboard = (() => {
             </div>
             <div class="form-group"><label class="form-label">Formato</label>
               <select id="w-value-format" class="form-control">
-                <option value="number" ${(cfg.valueFormat??'number')==='number'?'selected':''}>Número</option>
-                <option value="compact" ${cfg.valueFormat==='compact'?'selected':''}>Compacto (1,2 mi)</option>
+                <option value="number" ${(cfg.valueFormat??'number')==='number'?'selected':''}>Número completo</option>
+                <option value="compact" ${cfg.valueFormat==='compact'?'selected':''}>Abreviado</option>
                 <option value="currency" ${cfg.valueFormat==='currency'?'selected':''}>Moeda</option>
                 <option value="percent" ${cfg.valueFormat==='percent'?'selected':''}>Percentual</option>
               </select>
@@ -829,6 +1359,12 @@ const Dashboard = (() => {
             <div class="form-group"><label class="form-label">Casas decimais</label>
               <select id="w-decimals" class="form-control">
                 ${[0,1,2,3,4].map(n => `<option value="${n}" ${(cfg.valueDecimals??cfg.decimals??0)==n?'selected':''}>${n}</option>`).join('')}
+              </select>
+            </div>
+            <div class="form-group"><label class="form-label">Escala percentual</label>
+              <select id="w-percent-scale" class="form-control">
+                <option value="direct" ${(cfg.percentScale??'direct')==='direct'?'selected':''}>Já está em percentual</option>
+                <option value="fraction" ${cfg.percentScale==='fraction'?'selected':''}>Fração decimal</option>
               </select>
             </div>
             <div class="form-group"><label class="form-label">Moeda</label>
@@ -898,6 +1434,13 @@ const Dashboard = (() => {
             <label class="form-label">Agregação</label>
             ${aggSelect('w-agg', cfg.aggregation)}
           </div>
+          ${w.type === 'bar' ? `<div class="form-group">
+            <label class="form-label">Orientação das barras</label>
+            <select id="w-bar-orientation" class="form-control">
+              <option value="vertical" ${(cfg.barOrientation ?? 'vertical') === 'vertical' ? 'selected' : ''}>Vertical</option>
+              <option value="horizontal" ${cfg.barOrientation === 'horizontal' ? 'selected' : ''}>Horizontal</option>
+            </select>
+          </div>` : ''}
           <div class="form-group">
             <label class="form-label">Agrupar datas</label>
             <select id="w-date-group" class="form-control">
@@ -949,14 +1492,20 @@ const Dashboard = (() => {
         <div class="form-grid">
           <div class="form-group"><label class="form-label">Formato</label>
             <select id="w-value-format" class="form-control">
-              <option value="number" ${(cfg.valueFormat??'number')==='number'?'selected':''}>Número</option>
-              <option value="compact" ${cfg.valueFormat==='compact'?'selected':''}>Compacto (1,2 mi)</option>
+              <option value="number" ${(cfg.valueFormat??'number')==='number'?'selected':''}>Número completo</option>
+              <option value="compact" ${cfg.valueFormat==='compact'?'selected':''}>Abreviado</option>
               <option value="currency" ${cfg.valueFormat==='currency'?'selected':''}>Moeda</option>
               <option value="percent" ${cfg.valueFormat==='percent'?'selected':''}>Percentual</option>
             </select>
           </div>
           <div class="form-group"><label class="form-label">Casas decimais</label>
             <select id="w-value-decimals" class="form-control">${[0,1,2,3,4].map(n => `<option value="${n}" ${(cfg.valueDecimals??0)==n?'selected':''}>${n}</option>`).join('')}</select>
+          </div>
+          <div class="form-group"><label class="form-label">Escala percentual</label>
+            <select id="w-percent-scale" class="form-control">
+              <option value="direct" ${(cfg.percentScale??'direct')==='direct'?'selected':''}>Já está em percentual</option>
+              <option value="fraction" ${cfg.percentScale==='fraction'?'selected':''}>Fração decimal</option>
+            </select>
           </div>
           <div class="form-group"><label class="form-label">Moeda</label>
             <select id="w-currency" class="form-control">${['BRL','USD','EUR'].map(code => `<option value="${code}" ${(cfg.currency??'BRL')===code?'selected':''}>${code}</option>`).join('')}</select>
@@ -978,13 +1527,23 @@ const Dashboard = (() => {
     return html;
   }
 
+  function toggleButtonDestinationFields() {
+    const type = document.getElementById('w-button-destination')?.value ?? 'page';
+    const pageGroup = document.getElementById('w-button-page-group');
+    const urlGroup = document.getElementById('w-button-url-group');
+    if (pageGroup) pageGroup.style.display = type === 'page' ? '' : 'none';
+    if (urlGroup) urlGroup.style.display = type === 'external' ? '' : 'none';
+  }
+
   /* ── Salvar widget (vindo do modal) ─────── */
   async function saveWidget() {
     const w = widgets.find(x => x.id === editingId);
     if (!w) return;
 
     w.title = document.getElementById('w-title')?.value.trim() || w.title;
-    w.size  = document.querySelector('input[name="w-size"]:checked')?.value ?? w.size;
+    w.config.titleIcon = document.querySelector('input[name="w-title-icon"]:checked')?.value ?? 'auto';
+    const previousSize = w.size;
+    w.size = document.querySelector('input[name="w-size"]:checked')?.value ?? w.size;
 
     if (w.type === 'text') {
       w.config.content = document.getElementById('w-text-content')?.value ?? '';
@@ -994,12 +1553,56 @@ const Dashboard = (() => {
       w.config.lineHeight = Math.max(1, Math.min(2.5, parseFloat(document.getElementById('w-text-line-height')?.value ?? '1.6')));
       w.config.color = document.getElementById('w-text-color')?.value ?? '#334155';
       w.config.background = document.getElementById('w-text-bg')?.value ?? '#ffffff';
+    } else if (w.type === 'button') {
+      const destinationType = document.getElementById('w-button-destination')?.value ?? 'page';
+      const url = document.getElementById('w-button-url')?.value.trim() ?? '';
+      if (destinationType === 'external' && !normalizeExternalUrl(url)) {
+        App.toast('Informe um link externo válido.', 'error');
+        return;
+      }
+      w.config.label = document.getElementById('w-button-label')?.value.trim() || 'Abrir';
+      w.config.destinationType = destinationType;
+      w.config.pageId = document.getElementById('w-button-page')?.value ?? pages[0]?.id ?? '';
+      w.config.url = destinationType === 'external' ? normalizeExternalUrl(url) : url;
+      w.config.icon = document.querySelector('input[name="w-button-icon"]:checked')?.value ?? 'none';
+      w.config.background = document.getElementById('w-button-bg')?.value ?? '#6366f1';
+      w.config.textColor = document.getElementById('w-button-text-color')?.value ?? '#ffffff';
+      w.config.fontFamily = document.getElementById('w-button-font')?.value ?? 'system';
+      w.config.fontSize = Math.max(10, Math.min(42, parseInt(document.getElementById('w-button-font-size')?.value ?? '16')));
+      w.config.align = document.getElementById('w-button-align')?.value ?? 'center';
+      w.config.fullWidth = document.getElementById('w-button-full')?.checked ?? false;
+    } else if (w.type === 'image') {
+      const file = document.getElementById('w-image-file')?.files?.[0];
+      const url = document.getElementById('w-image-url')?.value.trim() ?? '';
+      try {
+        if (file) w.config.source = await readImageFile(file);
+        else if (url) {
+          const safeUrl = safeImageSource(url);
+          if (!safeUrl) throw new Error('Use uma URL http(s) válida');
+          w.config.source = safeUrl;
+        }
+      } catch (error) {
+        App.toast(error.message, 'error');
+        return;
+      }
+      w.config.alt = document.getElementById('w-image-alt')?.value.trim() || 'Imagem';
+      w.config.fit = document.getElementById('w-image-fit')?.value ?? 'contain';
+      w.config.background = document.getElementById('w-image-bg')?.value ?? '#ffffff';
+    } else if (w.type === 'filter') {
+      w.config.columns = [...document.querySelectorAll('#w-filter-cols input:checked')].map(input => input.value);
+      w.config.orientation = document.getElementById('w-filter-orientation')?.value ?? 'vertical';
+      const activeValues = App.state.widgetFilters[w.id] ?? {};
+      Object.keys(activeValues).forEach(column => {
+        if (!w.config.columns.includes(column)) delete activeValues[column];
+      });
+      if (!Object.keys(activeValues).length) App.removeWidgetFilters(w.id);
     } else if (w.type === 'kpi') {
       w.config.column   = document.getElementById('w-kpi-col')?.value   ?? w.config.column;
       w.config.kpiAgg   = document.getElementById('w-kpi-agg')?.value   ?? w.config.kpiAgg;
       w.config.decimals = parseInt(document.getElementById('w-decimals')?.value ?? '0');
       w.config.valueDecimals = w.config.decimals;
       w.config.valueFormat = document.getElementById('w-value-format')?.value ?? 'number';
+      w.config.percentScale = document.getElementById('w-percent-scale')?.value ?? 'direct';
       w.config.currency = document.getElementById('w-currency')?.value ?? 'BRL';
       w.config.prefix   = document.getElementById('w-prefix')?.value    ?? '';
       w.config.suffix   = document.getElementById('w-suffix')?.value    ?? '';
@@ -1020,7 +1623,9 @@ const Dashboard = (() => {
       w.config.showOthers = document.getElementById('w-others')?.checked ?? false;
       w.config.valueFormat = document.getElementById('w-value-format')?.value ?? 'number';
       w.config.valueDecimals = parseInt(document.getElementById('w-value-decimals')?.value ?? '0');
+      w.config.percentScale = document.getElementById('w-percent-scale')?.value ?? 'direct';
       w.config.currency = document.getElementById('w-currency')?.value ?? 'BRL';
+      if (w.type === 'bar') w.config.barOrientation = document.getElementById('w-bar-orientation')?.value ?? 'vertical';
 
       const isRound = ['pie','doughnut'].includes(w.type);
       if (isRound) {
@@ -1035,12 +1640,19 @@ const Dashboard = (() => {
     // Atualiza tamanho no DOM
     const el = document.querySelector(`[data-id="${w.id}"]`);
     if (el) {
-      el.className = el.className.replace(/sz-\w+/, '').trim() + ` sz-${w.size}`;
-      el.querySelector('.widget-title').innerHTML =
-        `<i class="fa-solid fa-grip-vertical widget-grip" aria-hidden="true"></i><i class="fa-solid ${TYPE_META[w.type]?.icon ?? 'fa-chart-bar'}" style="margin-right:6px;opacity:.5;font-size:11px;"></i>${escHtml(w.title)}`;
+      if (w.size !== previousSize) {
+        const gridWidth = getGridWidth();
+        w.layout.width = widthForSize(w.size, gridWidth);
+        w.layout.x = clamp(w.layout.x, 0, Math.max(0, gridWidth - w.layout.width));
+        applyWidgetLayout(w, el);
+      }
+      updateSizeButton(w, el);
+      el.querySelector('.widget-title').innerHTML = widgetTitleHTML(w);
     }
 
-    await renderWidgetContent(w);
+    if (w.type === 'filter') await renderAll();
+    else await renderWidgetContent(w);
+    updateCanvasBounds();
     pushHistory();
     App.closeModal();
     App.toast('Widget atualizado!', 'success');
@@ -1049,9 +1661,11 @@ const Dashboard = (() => {
   /* ── Remover ─────────────────────────────── */
   function deleteWidget(id) {
     if (chartMap[id]) { try { chartMap[id].destroy(); } catch(_) {} delete chartMap[id]; }
+    App.removeWidgetFilters(id);
     widgets = widgets.filter(w => w.id !== id);
     document.querySelector(`[data-id="${id}"]`)?.remove();
     updatePlaceholder();
+    updateCanvasBounds();
     pushHistory();
   }
 
@@ -1062,10 +1676,15 @@ const Dashboard = (() => {
     const clone = JSON.parse(JSON.stringify(orig));
     clone.id    = 'w_' + Date.now();
     clone.title = clone.title + ' (cópia)';
+    if (clone.layout) {
+      const gridWidth = getGridWidth();
+      clone.layout.x = clamp(clone.layout.x + 24, 0, Math.max(0, gridWidth - clone.layout.width));
+      clone.layout.y += 24;
+    }
     widgets.push(clone);
     renderWidget(clone);
-    initSortable();
     updatePlaceholder();
+    updateCanvasBounds();
     pushHistory();
     App.toast('Widget duplicado!');
   }
@@ -1074,11 +1693,13 @@ const Dashboard = (() => {
   function clearAll() {
     if (!widgets.length) return;
     if (!confirm('Remover todos os widgets do dashboard?')) return;
+    widgets.forEach(widget => App.removeWidgetFilters(widget.id));
     widgets = [];
     Object.values(chartMap).forEach(c => { try { c.destroy(); } catch(_) {} });
     for (const k in chartMap) delete chartMap[k];
     document.getElementById('widgets-grid').innerHTML = '';
     updatePlaceholder();
+    updateCanvasBounds();
     pushHistory();
   }
 
@@ -1087,27 +1708,171 @@ const Dashboard = (() => {
     const canvas = document.getElementById('dash-canvas');
     if (empty) empty.classList.toggle('hidden', widgets.length > 0);
     if (canvas) canvas.classList.toggle('has-widgets', widgets.length > 0);
+    renderPageNav();
+  }
+
+  function syncCurrentPage() {
+    if (pages[activePageIndex]) pages[activePageIndex].widgets = widgets;
+  }
+
+  function renderPageNav() {
+    const container = document.getElementById('dashboard-page-tabs');
+    if (!container) return;
+    const pageButtons = pages.map((page, index) => `
+      <div class="dashboard-page-item ${index === activePageIndex ? 'active' : ''}">
+        <button class="dashboard-page-button" onclick="Dashboard.switchPage(${index})">
+          <i class="fa-solid ${page.icon}"></i>
+          <span>${escHtml(page.name)}</span>
+        </button>
+        <button class="dashboard-page-edit" onclick="Dashboard.openPageModal(${index})" title="Editar nome e ícone">
+          <i class="fa-solid fa-pen"></i>
+        </button>
+      </div>
+    `).join('');
+    const addButton = `
+      <button class="dashboard-page-add" onclick="Dashboard.addPage()" ${pages.length >= MAX_PAGES ? 'disabled' : ''} title="${pages.length >= MAX_PAGES ? 'Limite de 5 páginas atingido' : 'Adicionar página'}">
+        <i class="fa-solid fa-plus"></i>
+        <span>Adicionar página</span>
+      </button>`;
+    container.innerHTML = pageButtons + addButton;
+  }
+
+  async function addPage() {
+    if (pages.length >= MAX_PAGES) {
+      App.toast('O dashboard permite no máximo 5 páginas.', 'info');
+      return;
+    }
+    syncCurrentPage();
+    const number = pages.length + 1;
+    pages.push({
+      id: `page_${Date.now()}`,
+      name: `Página ${number}`,
+      icon: number % 2 === 0 ? 'fa-chart-line' : 'fa-chart-pie',
+      widgets: [],
+    });
+    await switchPage(pages.length - 1);
+    App.toast(`Página ${number} criada.`, 'success');
+  }
+
+  async function switchPage(index) {
+    if (!pages[index] || index === activePageIndex) return;
+    syncCurrentPage();
+    activePageIndex = index;
+    widgets = pages[index].widgets ?? [];
+    resetHistory();
+    await renderAll();
+    pushHistory();
+    App.renderColumnsList();
+  }
+
+  function switchPageById(pageId) {
+    const index = pages.findIndex(page => page.id === pageId);
+    if (index < 0) {
+      App.toast('A página de destino não existe.', 'error');
+      return;
+    }
+    return switchPage(index);
+  }
+
+  function openPageModal(index) {
+    if (!pages[index]) return;
+    editingPageIndex = index;
+    document.getElementById('page-name-input').value = pages[index].name;
+    const deleteButton = document.getElementById('page-delete-button');
+    if (deleteButton) {
+      deleteButton.disabled = pages.length <= 1;
+      deleteButton.title = pages.length <= 1 ? 'O dashboard precisa ter ao menos uma página' : 'Excluir esta página';
+    }
+    document.getElementById('page-icon-picker').innerHTML = PAGE_ICONS.map(item => `
+      <label class="icon-opt" title="${item.label}">
+        <input type="radio" name="page-icon" value="${item.value}" ${pages[index].icon === item.value ? 'checked' : ''}>
+        <span><i class="fa-solid ${item.icon}"></i><small>${item.label}</small></span>
+      </label>
+    `).join('');
+    document.getElementById('page-modal-overlay').classList.add('open');
+  }
+
+  function closePageModal() {
+    document.getElementById('page-modal-overlay')?.classList.remove('open');
+  }
+
+  function savePageSettings() {
+    const page = pages[editingPageIndex];
+    if (!page) return;
+    page.name = document.getElementById('page-name-input')?.value.trim() || `Página ${editingPageIndex + 1}`;
+    page.icon = document.querySelector('input[name="page-icon"]:checked')?.value ?? page.icon;
+    renderPageNav();
+    closePageModal();
+    App.toast('Botão da página atualizado.', 'success');
+  }
+
+  async function deletePage() {
+    if (pages.length <= 1) {
+      App.toast('O dashboard precisa ter ao menos uma página.', 'info');
+      return;
+    }
+    const page = pages[editingPageIndex];
+    if (!page) {
+      App.toast('Página não encontrada.', 'error');
+      return;
+    }
+    if (!window.confirm(`Excluir a página "${page.name}" e todos os widgets dela?`)) return;
+
+    syncCurrentPage();
+    const removedIndex = editingPageIndex;
+    const removedPage = pages.splice(removedIndex, 1)[0];
+    if (removedIndex < activePageIndex) activePageIndex--;
+    else if (removedIndex === activePageIndex) activePageIndex = Math.min(removedIndex, pages.length - 1);
+    activePageIndex = Math.max(0, Math.min(activePageIndex, pages.length - 1));
+    widgets = pages[activePageIndex].widgets ?? [];
+    closePageModal();
+
+    (removedPage?.widgets ?? []).forEach(widget => App.removeWidgetFilters(widget.id));
+    resetHistory();
+    await renderAll();
+    pushHistory();
+    App.renderColumnsList();
+    App.toast('Página excluída.', 'success');
   }
 
   /* ── Serialização ────────────────────────── */
   function serialize() {
+    syncCurrentPage();
     return {
       title:  document.getElementById('dash-title')?.value ?? 'Meu Dashboard',
       theme:  Charts.getTheme(),
+      customColor: Charts.getCustomColor(),
       bg:     document.getElementById('dash-canvas')?.dataset.bg ?? '',
-      widgets: widgets,
+      widgets: pages[0].widgets,
+      pages,
+      activePage: activePageIndex,
     };
   }
 
   async function load(data) {
     document.getElementById('dash-title').value = data.title ?? 'Dashboard';
+    if (data.customColor) Charts.setCustomTheme(data.customColor);
     if (data.theme) Charts.setTheme(data.theme);
     if (data.bg) {
       const canvas = document.getElementById('dash-canvas');
       canvas.style.background = data.bg;
       canvas.dataset.bg = data.bg;
     }
-    widgets = data.widgets ?? [];
+    if (Array.isArray(data.pages) && data.pages.length) {
+      pages = data.pages.slice(0, MAX_PAGES).map((page, index) => ({
+        id: page.id ?? `page_${index + 1}`,
+        name: page.name ?? `Página ${index + 1}`,
+        icon: PAGE_ICONS.some(item => item.value === page.icon) ? page.icon : index ? 'fa-chart-line' : 'fa-chart-pie',
+        widgets: Array.isArray(page.widgets) ? page.widgets : [],
+      }));
+      activePageIndex = Math.max(0, Math.min(pages.length - 1, Number(data.activePage) || 0));
+    } else {
+      pages = [
+        { id: 'page_1', name: 'Página 1', icon: 'fa-chart-pie', widgets: data.widgets ?? [] },
+      ];
+      activePageIndex = 0;
+    }
+    widgets = pages[activePageIndex].widgets;
     historyStack.length = 0;
     historyPos = -1;
     await renderAll();
@@ -1147,10 +1912,12 @@ const Dashboard = (() => {
     addWidget, renderAll, renderWidget,
     openEditModal, saveWidget,
     deleteWidget, duplicateWidget, clearAll,
-    resizeWidget, startResize, goToPage,
+    resizeWidget, startResize, startDrag, goToPage,
     prepareForPDFExport, restoreAfterPDFExport,
     serialize, load, getWidgets, generateSuggestedDashboard,
     updatePlaceholder,
+    addPage, switchPage, switchPageById, openPageModal, closePageModal, savePageSettings, deletePage,
+    toggleButtonDestinationFields,
     undo, redo, resetHistory,
   };
 })();
@@ -1160,4 +1927,8 @@ function escHtml(s) {
   return String(s ?? '')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function escJs(s) {
+  return String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
