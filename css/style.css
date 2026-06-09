@@ -430,6 +430,22 @@ table.data-table .row-num { color: var(--c-text-2); font-size: 11px; user-select
   overflow: hidden; position: relative;
 }
 .widget-body canvas { width: 100% !important; height: 100% !important; max-height: none; }
+.widget-loading {
+  position: absolute; right: 8px; bottom: 8px; z-index: 4;
+  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  border: 1px solid rgba(148,163,184,.28); border-radius: 50%;
+  color: #94a3b8; background: rgba(255,255,255,.9);
+  box-shadow: 0 2px 8px rgba(15,23,42,.08);
+}
+.widget-loading span {
+  position: absolute; right: 0; bottom: calc(100% + 7px);
+  width: max-content; max-width: 180px; padding: 6px 9px;
+  border-radius: 7px; color: #fff; background: #334155;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+  opacity: 0; transform: translateY(3px); pointer-events: none;
+  transition: opacity .15s ease, transform .15s ease;
+}
+.widget-loading:hover span { opacity: 1; transform: none; }
 
 /* Text / Markdown widget */
 .markdown-widget {

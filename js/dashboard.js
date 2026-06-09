@@ -72,6 +72,7 @@ const Dashboard = (() => {
   const MIN_WIDGET_HEIGHT = 140;
   const MAX_WIDGET_HEIGHT = 1200;
   const MAX_PAGES = 5;
+  const QUERY_TIMEOUT_MS = 30000;
 
   /* ── Ícones por tipo ─────────────────────── */
   const TYPE_META = {
@@ -645,7 +646,11 @@ const Dashboard = (() => {
     if (!body) return;
     const version = (renderVersion[w.id] ?? 0) + 1;
     renderVersion[w.id] = version;
-    body.innerHTML = '<div style="padding:24px;text-align:center;color:#94a3b8;font-size:13px"><i class="fa-solid fa-circle-notch fa-spin"></i> Consultando dados…</div>';
+    body.innerHTML = `
+      <div class="widget-loading" role="status" aria-label="Consultando dados">
+        <i class="fa-solid fa-circle-notch fa-spin"></i>
+        <span>Consultando dados…</span>
+      </div>`;
 
     if (w.type === 'text') {
       renderTextWidget(body, w);
@@ -660,7 +665,19 @@ const Dashboard = (() => {
       return;
     }
     if (w.type === 'filter') {
-      await renderFilterWidget(body, w);
+      try {
+        await withQueryTimeout(renderFilterWidget(body, w));
+      } catch (error) {
+        console.error(error);
+        if (renderVersion[w.id] === version) {
+          renderWidgetError(
+            body,
+            error?.code === 'QUERY_TIMEOUT'
+              ? 'A consulta dos filtros demorou demais. Recarregue a planilha e tente novamente.'
+              : 'Falha ao carregar as opções dos filtros'
+          );
+        }
+      }
       return;
     }
 
@@ -680,9 +697,9 @@ const Dashboard = (() => {
       try {
         if (w.type === 'kpi') {
           const [current, total] = await Promise.all([
-            App.queryKPI(w.config),
+            withQueryTimeout(App.queryKPI(w.config)),
             (App.state.activeFilter || Object.keys(App.state.widgetFilters).length || App.state.crossFilter)
-              ? App.queryKPI(w.config, true)
+              ? withQueryTimeout(App.queryKPI(w.config, true))
               : Promise.resolve(null),
           ]);
           if (renderVersion[w.id] !== version) return;
@@ -691,15 +708,15 @@ const Dashboard = (() => {
         }
 
         if (w.type === 'table') {
-          const result = await App.queryTable(w.config, pageMap[w.id] ?? 0);
+          const result = await withQueryTimeout(App.queryTable(w.config, pageMap[w.id] ?? 0));
           if (renderVersion[w.id] !== version) return;
           renderQueryTable(body, w, result);
           return;
         }
 
         const prepared = w.type === 'scatter'
-          ? await App.queryScatter(w.config)
-          : await App.queryAggregate(w.config);
+          ? await withQueryTimeout(App.queryScatter(w.config))
+          : await withQueryTimeout(App.queryAggregate(w.config));
         if (renderVersion[w.id] !== version) return;
         body.innerHTML = '';
         const canvas = document.createElement('canvas');
@@ -709,7 +726,15 @@ const Dashboard = (() => {
         else renderWidgetError(body, 'Configure as colunas para visualizar o gráfico');
       } catch (error) {
         console.error(error);
-        if (renderVersion[w.id] === version) renderWidgetError(body, 'Falha ao consultar os dados');
+        if (renderVersion[w.id] === version) {
+          const timedOut = error?.code === 'QUERY_TIMEOUT';
+          renderWidgetError(
+            body,
+            timedOut
+              ? 'A consulta demorou demais. Tente reduzir os filtros ou recarregar a planilha.'
+              : 'Falha ao consultar os dados'
+          );
+        }
       }
       return;
     }
@@ -727,6 +752,7 @@ const Dashboard = (() => {
     }
 
     // Chart
+    body.innerHTML = '';
     const canvas = document.createElement('canvas');
     body.appendChild(canvas);
 
@@ -755,6 +781,18 @@ const Dashboard = (() => {
     const color = /^#[0-9a-f]{6}$/i.test(cfg.color ?? '') ? cfg.color : '#334155';
     const background = /^#[0-9a-f]{6}$/i.test(cfg.background ?? '') ? cfg.background : '#ffffff';
     body.innerHTML = `<div class="markdown-widget" style="font-family:${fontFamilies[cfg.fontFamily] ?? fontFamilies.system};font-size:${fontSize}px;line-height:${lineHeight};text-align:${align};color:${color};background:${background}">${MarkdownRenderer.render(cfg.content ?? '')}</div>`;
+  }
+
+  function withQueryTimeout(promise, timeoutMs = QUERY_TIMEOUT_MS) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error('Tempo limite da consulta excedido');
+        error.code = 'QUERY_TIMEOUT';
+        reject(error);
+      }, timeoutMs);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
   }
 
   function safeImageSource(value) {

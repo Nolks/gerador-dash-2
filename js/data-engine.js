@@ -16,6 +16,7 @@ const DataEngine = (() => {
   let sourceColumns = {};
   let columnTypes = {};
   let columnConfig = {};
+  let queryQueue = Promise.resolve();
   const ROW_ID = '__dashgen_row_id';
 
   function quoteId(value) {
@@ -79,6 +80,7 @@ const DataEngine = (() => {
     sourceColumns = {};
     columnTypes = {};
     columnConfig = {};
+    queryQueue = Promise.resolve();
     if (!conn || !db) return;
     try { await conn.query('DROP VIEW IF EXISTS dash_data'); } catch (_) {}
     try { await conn.query('DROP VIEW IF EXISTS dash_source'); } catch (_) {}
@@ -275,9 +277,11 @@ const DataEngine = (() => {
     return clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
   }
 
-  async function queryRows(sql) {
+  function queryRows(sql) {
     if (!conn) throw new Error('Motor de dados nao inicializado.');
-    return arrowToRows(await conn.query(sql));
+    const task = queryQueue.then(async () => arrowToRows(await conn.query(sql)));
+    queryQueue = task.catch(() => {});
+    return task;
   }
 
   async function count(activeFilter, crossFilter) {
