@@ -31,6 +31,11 @@ const App = (() => {
   let filteredRowsCache = { key: '', rows: null };
   let activeImport = null;
   let importSequence = 0;
+  let uploadSources = [];
+  const MAX_UPLOAD_FILES = 10;
+  const MAX_EXCEL_FILES = 5;
+  const MAX_EXCEL_BYTES = 150 * 1024 * 1024;
+  const MAX_ANALYTIC_BYTES = 500 * 1024 * 1024;
 
   function invalidateMemoryCache() {
     memoryDataVersion++;
@@ -83,7 +88,10 @@ const App = (() => {
   /* ── File input & drag-drop ──────────────── */
   function setupFileInput() {
     const inp = document.getElementById('file-input');
-    inp.addEventListener('change', () => { if (inp.files[0]) handleFile(inp.files[0]); });
+    inp.addEventListener('change', () => {
+      if (inp.files.length) addUploadFiles([...inp.files]);
+      inp.value = '';
+    });
     document.getElementById('upload-zone').addEventListener('click', () => inp.click());
   }
 
@@ -94,9 +102,103 @@ const App = (() => {
     zone.addEventListener('drop', e => {
       e.preventDefault();
       zone.classList.remove('drag-over');
-      const file = e.dataTransfer.files[0];
-      if (file) handleFile(file);
+      const files = [...e.dataTransfer.files];
+      if (files.length) addUploadFiles(files);
     });
+  }
+
+  function fileGroup(file) {
+    return /\.(xlsx|xls)$/i.test(file.name) ? 'excel' : 'analytic';
+  }
+
+  function validateUploadSources(sources) {
+    if (sources.length > MAX_UPLOAD_FILES) return 'O limite geral é de 10 arquivos.';
+    const groups = new Set(sources.map(source => fileGroup(source.file)));
+    if (groups.size > 1) return 'Nesta primeira versão, não misture Excel com CSV/Parquet no mesmo empilhamento.';
+    const totalBytes = sources.reduce((sum, source) => sum + source.file.size, 0);
+    if (groups.has('excel')) {
+      if (sources.length > MAX_EXCEL_FILES) return 'O limite para Excel é de 5 arquivos.';
+      if (totalBytes > MAX_EXCEL_BYTES) return 'Arquivos Excel podem somar no máximo 150 MB.';
+    } else if (totalBytes > MAX_ANALYTIC_BYTES) {
+      return 'Arquivos CSV/Parquet podem somar no máximo 500 MB.';
+    }
+    return '';
+  }
+
+  function addUploadFiles(files) {
+    const allowed = ['.xlsx', '.xls', '.csv', '.parquet'];
+    const validFiles = files.filter(file => allowed.some(ext => file.name.toLowerCase().endsWith(ext)));
+    if (validFiles.length !== files.length) toast('Alguns arquivos foram ignorados por terem formato inválido.', 'info');
+    const additions = validFiles
+      .filter(file => !uploadSources.some(source =>
+        source.file.name === file.name &&
+        source.file.size === file.size &&
+        source.file.lastModified === file.lastModified
+      ))
+      .map((file, index) => ({
+        id: `source_${Date.now()}_${index}`,
+        file,
+        name: file.name.replace(/\.[^.]+$/, ''),
+      }));
+    const next = [...uploadSources, ...additions];
+    const error = validateUploadSources(next);
+    if (error) { toast(error, 'error'); return; }
+    uploadSources = next;
+    renderUploadSources();
+  }
+
+  function renameUploadSource(id, value) {
+    const source = uploadSources.find(item => item.id === id);
+    if (!source) return;
+    source.name = String(value ?? '').trim() || source.file.name.replace(/\.[^.]+$/, '');
+    renderUploadSources();
+  }
+
+  function removeUploadSource(id) {
+    uploadSources = uploadSources.filter(source => source.id !== id);
+    renderUploadSources();
+  }
+
+  function clearUploadSources() {
+    uploadSources = [];
+    renderUploadSources();
+  }
+
+  function renderUploadSources() {
+    const panel = document.getElementById('upload-sources-panel');
+    const list = document.getElementById('upload-sources-list');
+    const summary = document.getElementById('upload-sources-summary');
+    const importButton = document.getElementById('upload-sources-import');
+    if (!panel || !list || !summary || !importButton) return;
+    panel.hidden = !uploadSources.length;
+    const totalBytes = uploadSources.reduce((sum, source) => sum + source.file.size, 0);
+    summary.textContent = `${uploadSources.length} arquivo${uploadSources.length === 1 ? '' : 's'} · ${formatBytes(totalBytes)}`;
+    importButton.innerHTML = uploadSources.length > 1
+      ? '<i class="fa-solid fa-layer-group"></i> Importar e empilhar'
+      : '<i class="fa-solid fa-arrow-right"></i> Importar arquivo';
+    list.innerHTML = uploadSources.map(source => `
+      <div class="upload-source-item">
+        <span class="upload-source-icon"><i class="fa-solid ${fileGroup(source.file) === 'excel' ? 'fa-file-excel' : 'fa-database'}"></i></span>
+        <div class="upload-source-info">
+          <input value="${escHtml(source.name)}" maxlength="60"
+            onchange="App.renameUploadSource('${source.id}',this.value)"
+            aria-label="Nome da fonte">
+          <small>${escHtml(source.file.name)} · ${formatBytes(source.file.size)}</small>
+        </div>
+        <button onclick="App.removeUploadSource('${source.id}')" title="Remover arquivo"><i class="fa-solid fa-xmark"></i></button>
+      </div>`).join('');
+  }
+
+  async function importUploadSources() {
+    if (!uploadSources.length) return;
+    const error = validateUploadSources(uploadSources);
+    if (error) { toast(error, 'error'); return; }
+    if (uploadSources.length === 1) {
+      await handleFile(uploadSources[0].file);
+      return;
+    }
+    if (fileGroup(uploadSources[0].file) === 'excel') await handleExcelFiles(uploadSources);
+    else await handleAnalyticFiles(uploadSources);
   }
 
   /* ── Loading overlay ─────────────────────── */
@@ -228,6 +330,132 @@ const App = (() => {
   }
 
   /* ── Processar arquivo ───────────────────── */
+  async function parseExcelSource(source, token) {
+    const buffer = await readFileBuffer(source.file, token);
+    assertImportActive(token);
+    let result;
+    if (typeof Worker !== 'undefined') {
+      try { result = await parseWithWorker(buffer.slice(0), source.file.name, token); }
+      catch (error) {
+        if (token.cancelled || error.name === 'ImportCancelledError') throw error;
+        result = parseSynchronous(buffer, source.file.name);
+      }
+    } else {
+      result = parseSynchronous(buffer, source.file.name);
+    }
+    const firstSheet = result.sheetNames.find(name => result.sheets[name]?.length);
+    if (!firstSheet) throw new Error(`O arquivo "${source.file.name}" está vazio.`);
+    return { rows: result.sheets[firstSheet], sheetName: firstSheet };
+  }
+
+  function compatibleColumns(expected, actual) {
+    return expected.length === actual.length && expected.every((column, index) => column === actual[index]);
+  }
+
+  async function handleExcelFiles(sources) {
+    if (activeImport) { toast('Aguarde o encerramento da importação atual.', 'info'); return; }
+    const token = { id: ++importSequence, startedAt: performance.now(), cancelled: false, timer: null, cancelWorker: null };
+    activeImport = token;
+    const totalSize = sources.reduce((sum, source) => sum + source.file.size, 0);
+    state.fileSize = totalSize;
+    state.calculatedFields = [];
+    showLoading('Preparando arquivos Excel…', {
+      cancellable: true, progress: 8, step: 'read',
+      tip: 'Será utilizada a primeira aba com dados de cada arquivo. As colunas precisam ser iguais e estar na mesma ordem.',
+    });
+    startImportTimer(token);
+    try {
+      await DataEngine.reset();
+      const parsedSources = [];
+      for (let index = 0; index < sources.length; index++) {
+        assertImportActive(token);
+        updateLoadingMsg(`Lendo ${index + 1} de ${sources.length}: ${sources[index].file.name}`, 10 + (index / sources.length) * 55, 'read');
+        parsedSources.push({ ...sources[index], ...(await parseExcelSource(sources[index], token)) });
+      }
+      const expectedColumns = Object.keys(parsedSources[0].rows[0] ?? {});
+      const incompatible = parsedSources.find(source =>
+        !compatibleColumns(expectedColumns, Object.keys(source.rows[0] ?? {}))
+      );
+      if (incompatible) {
+        throw new Error(`As colunas de "${incompatible.file.name}" não são compatíveis com o primeiro arquivo.`);
+      }
+      let sourceColumn = 'Fonte';
+      let suffix = 2;
+      while (expectedColumns.includes(sourceColumn)) sourceColumn = `Fonte (${suffix++})`;
+      updateLoadingMsg('Empilhando tabelas compatíveis…', 72, 'prepare');
+      const combinedRows = parsedSources.flatMap(source =>
+        source.rows.map(row => ({ ...row, [sourceColumn]: source.name }))
+      );
+      state.fileName = `${sources.length} arquivos empilhados`;
+      state.dataMode = 'memory';
+      state.allSheets = { 'Dados combinados': combinedRows };
+      state.sheetNames = ['Dados combinados'];
+      selectSheet('Dados combinados');
+      state.fileSize = totalSize;
+      state.loadMs = Math.round(performance.now() - token.startedAt);
+      setLoadingProgress(100, 'finish');
+      hideLoading();
+      goToPreview();
+      toast(`${sources.length} arquivos empilhados · ${state.rowCount.toLocaleString('pt-BR')} linhas`, 'success');
+    } catch (error) {
+      hideLoading();
+      if (token.cancelled || error.name === 'ImportCancelledError') toast('Importação cancelada.', 'info');
+      else { console.error(error); toast('Erro ao empilhar arquivos: ' + error.message, 'error'); }
+    } finally {
+      clearInterval(token.timer);
+      token.cancelWorker = null;
+      if (activeImport === token) activeImport = null;
+    }
+  }
+
+  async function handleAnalyticFiles(sources) {
+    if (activeImport) { toast('Aguarde o encerramento da importação atual.', 'info'); return; }
+    const token = { id: ++importSequence, startedAt: performance.now(), cancelled: false, timer: null, cancelWorker: null };
+    activeImport = token;
+    const totalSize = sources.reduce((sum, source) => sum + source.file.size, 0);
+    state.fileSize = totalSize;
+    state.calculatedFields = [];
+    showLoading('Preparando arquivos analíticos…', {
+      cancellable: true, progress: 8, step: 'read',
+      tip: 'CSV e Parquet serão empilhados no motor analítico sem criar todos os registros na memória do navegador.',
+    });
+    startImportTimer(token);
+    try {
+      const result = await DataEngine.loadFiles(sources, message => {
+        if (!token.cancelled) updateLoadingMsg(message);
+      });
+      assertImportActive(token);
+      state.fileName = `${sources.length} arquivos empilhados`;
+      state.dataMode = 'query';
+      state.currentSheet = 'Dados combinados';
+      state.sheetNames = ['Dados combinados'];
+      state.allSheets = {};
+      state.rawRows = result.previewRows;
+      state.rows = result.previewRows;
+      state.previewRows = result.previewRows;
+      state.rowCount = result.rowCount;
+      state.loadMs = Math.round(performance.now() - token.startedAt);
+      state.columnTypes = result.columnTypes;
+      state.columnConfig = { ...result.columnTypes };
+      state.columns = result.columns;
+      state.numericColumns = ExcelParser.numericColumns(result.columnTypes);
+      state.stringColumns = ExcelParser.stringColumns(result.columnTypes);
+      setLoadingProgress(100, 'finish');
+      hideLoading();
+      goToPreview();
+      toast(`${sources.length} arquivos empilhados no motor analítico.`, 'success');
+    } catch (error) {
+      await DataEngine.reset();
+      hideLoading();
+      if (token.cancelled || error.name === 'ImportCancelledError') toast('Importação cancelada.', 'info');
+      else { console.error(error); toast('Erro ao empilhar arquivos: ' + error.message, 'error'); }
+    } finally {
+      clearInterval(token.timer);
+      token.cancelWorker = null;
+      if (activeImport === token) activeImport = null;
+    }
+  }
+
   async function handleFile(file) {
     if (activeImport) { toast('Aguarde o encerramento da importação atual.', 'info'); return; }
     const allowed = ['.xlsx', '.xls', '.csv', '.parquet'];
@@ -1276,6 +1504,7 @@ const App = (() => {
     toggleSidebar,
     toggleExportMenu, closeExportMenu,
     cancelImport,
+    addUploadFiles, renameUploadSource, removeUploadSource, clearUploadSources, importUploadSources,
     toast,
   };
 })();

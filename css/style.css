@@ -96,6 +96,51 @@ img { max-width: 100%; }
 .upload-sub   { font-size: 14px; color: #94a3b8; }
 .upload-formats { font-size: 12px; color: #64748b; }
 
+.upload-sources-panel {
+  width: 100%; padding: 18px; border: 1px solid rgba(255,255,255,.12);
+  border-radius: var(--radius); background: rgba(15,23,42,.55);
+  box-shadow: 0 18px 45px rgba(0,0,0,.18);
+}
+.upload-sources-panel[hidden] { display: none; }
+.upload-sources-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 12px;
+}
+.upload-sources-header strong { display: block; color: #f8fafc; font-size: 14px; }
+.upload-sources-header span { display: block; margin-top: 2px; color: #94a3b8; font-size: 11px; }
+.upload-sources-header button {
+  border: 0; color: #fca5a5; background: transparent; font-size: 11px;
+}
+.upload-sources-list { display: flex; flex-direction: column; gap: 8px; }
+.upload-source-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px;
+  border: 1px solid rgba(255,255,255,.1); border-radius: 9px;
+  background: rgba(255,255,255,.055);
+}
+.upload-source-icon {
+  width: 34px; height: 34px; flex: 0 0 auto; display: grid; place-items: center;
+  border-radius: 8px; color: #86efac; background: rgba(34,197,94,.12);
+}
+.upload-source-info { min-width: 0; flex: 1; }
+.upload-source-info input {
+  width: 100%; padding: 3px 6px; border: 1px solid transparent; border-radius: 5px;
+  color: #e2e8f0; background: transparent; font-weight: 650;
+}
+.upload-source-info input:focus { outline: none; border-color: #6366f1; background: rgba(15,23,42,.7); }
+.upload-source-info small {
+  display: block; padding: 0 6px; overflow: hidden; color: #64748b;
+  font-size: 10px; text-overflow: ellipsis; white-space: nowrap;
+}
+.upload-source-item > button {
+  width: 30px; height: 30px; flex: 0 0 auto; border: 0; border-radius: 7px;
+  color: #fca5a5; background: rgba(239,68,68,.12);
+}
+.upload-stack-info {
+  display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; padding: 9px 10px;
+  border-radius: 8px; color: #c7d2fe; background: rgba(99,102,241,.12); font-size: 11px;
+}
+.upload-sources-import { width: 100%; justify-content: center; margin-top: 12px; }
+
 .hero-features { display: flex; gap: 28px; flex-wrap: wrap; justify-content: center; }
 .hero-feature  { display: flex; flex-direction: column; align-items: center; gap: 8px; color: #94a3b8; font-size: 13px; }
 .hero-feature i { font-size: 22px; color: var(--c-primary); }

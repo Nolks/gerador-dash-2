@@ -20,19 +20,37 @@
       <span>Aebes DashGen</span>
     </div>
 
-    <h1>Planilha Excel → Dashboard em segundos</h1>
-    <p class="hero-sub">Envie seu arquivo, escolha os gráficos e apresente seus dados com estilo.</p>
+    <h1>Planilhas e tabelas → Dashboard em segundos</h1>
+    <p class="hero-sub">Envie uma ou várias fontes compatíveis, escolha os gráficos e apresente seus dados.</p>
 
     <div class="upload-zone" id="upload-zone">
-      <input type="file" id="file-input" accept=".xlsx,.xls,.csv,.parquet" hidden />
-      <i class="fa-solid fa-file-excel upload-icon"></i>
-      <p class="upload-title">Arraste o arquivo aqui</p>
+      <input type="file" id="file-input" accept=".xlsx,.xls,.csv,.parquet" multiple hidden />
+      <i class="fa-solid fa-file-circle-plus upload-icon"></i>
+      <p class="upload-title">Arraste os arquivos aqui</p>
       <p class="upload-sub">ou</p>
       <button class="btn btn-primary" onclick="event.stopPropagation(); document.getElementById('file-input').click()">
-        <i class="fa-solid fa-upload"></i> Selecionar arquivo
+        <i class="fa-solid fa-upload"></i> Selecionar arquivos
       </button>
-      <p class="upload-formats">Suporta .xlsx · .xls · .csv · .parquet</p>
+      <p class="upload-formats">Excel: até 5 arquivos / 150 MB · CSV/Parquet: até 10 arquivos / 500 MB</p>
     </div>
+
+    <section id="upload-sources-panel" class="upload-sources-panel" hidden>
+      <div class="upload-sources-header">
+        <div>
+          <strong>Fontes selecionadas</strong>
+          <span id="upload-sources-summary"></span>
+        </div>
+        <button type="button" onclick="App.clearUploadSources()">Limpar lista</button>
+      </div>
+      <div id="upload-sources-list" class="upload-sources-list"></div>
+      <div class="upload-stack-info">
+        <i class="fa-solid fa-layer-group"></i>
+        <span>Os arquivos serão empilhados. As colunas devem possuir os mesmos nomes e a mesma ordem.</span>
+      </div>
+      <button id="upload-sources-import" class="btn btn-primary upload-sources-import" onclick="App.importUploadSources()">
+        <i class="fa-solid fa-layer-group"></i> Importar e empilhar
+      </button>
+    </section>
 
     <div class="hero-features">
       <div class="hero-feature"><i class="fa-solid fa-chart-bar"></i><span>Gráficos automáticos</span></div>

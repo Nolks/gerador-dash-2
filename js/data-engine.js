@@ -9,7 +9,7 @@ const DataEngine = (() => {
   let duckdb = null;
   let db = null;
   let conn = null;
-  let sourceFileName = '';
+  let sourceFileNames = [];
   let active = false;
   let rowCount = 0;
   let columns = [];
@@ -88,32 +88,70 @@ const DataEngine = (() => {
     try { await conn.query('DROP VIEW IF EXISTS dash_data'); } catch (_) {}
     try { await conn.query('DROP VIEW IF EXISTS dash_source'); } catch (_) {}
     try { await conn.query('DROP TABLE IF EXISTS dash_source'); } catch (_) {}
-    if (sourceFileName) {
+    for (const sourceFileName of sourceFileNames) {
       try { await db.dropFile(sourceFileName); } catch (_) {}
     }
-    sourceFileName = '';
+    sourceFileNames = [];
   }
 
   async function loadFile(file, onProgress = () => {}) {
+    return loadFiles([{ file, name: file.name }], onProgress);
+  }
+
+  async function loadFiles(sources, onProgress = () => {}) {
+    if (!Array.isArray(sources) || !sources.length) throw new Error('Nenhum arquivo informado.');
     await init(onProgress);
     await reset();
 
-    sourceFileName = `dash_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    onProgress('Registrando arquivo no motor...');
-    await db.registerFileHandle(
-      sourceFileName,
-      file,
-      duckdb.DuckDBDataProtocol.BROWSER_FILEREADER,
-      true
+    const registered = [];
+    for (let index = 0; index < sources.length; index++) {
+      const source = sources[index];
+      const sourceFileName = `dash_${Date.now()}_${index}_${source.file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+      sourceFileNames.push(sourceFileName);
+      onProgress(`Registrando arquivo ${index + 1} de ${sources.length}...`);
+      await db.registerFileHandle(
+        sourceFileName,
+        source.file,
+        duckdb.DuckDBDataProtocol.BROWSER_FILEREADER,
+        true
+      );
+      const lower = source.file.name.toLowerCase();
+      const scan = lower.endsWith('.parquet')
+        ? `read_parquet(${quoteString(sourceFileName)})`
+        : `read_csv_auto(${quoteString(sourceFileName)}, header=true, sample_size=100000, all_varchar=true)`;
+      const schemaRows = arrowToRows(await conn.query(`DESCRIBE SELECT * FROM ${scan}`));
+      const originalColumns = schemaRows.map(row => row.column_name);
+      const normalizedColumns = ExcelParser.normalizeHeaders(originalColumns);
+      registered.push({ ...source, scan, originalColumns, normalizedColumns });
+    }
+
+    const expectedColumns = registered[0].normalizedColumns;
+    const incompatible = registered.find(source =>
+      source.normalizedColumns.length !== expectedColumns.length ||
+      source.normalizedColumns.some((column, index) => column !== expectedColumns[index])
     );
+    if (incompatible) {
+      throw new Error(`As colunas de "${incompatible.file.name}" não são compatíveis com o primeiro arquivo.`);
+    }
 
-    const lower = file.name.toLowerCase();
-    const scan = lower.endsWith('.parquet')
-      ? `read_parquet(${quoteString(sourceFileName)})`
-      : `read_csv_auto(${quoteString(sourceFileName)}, header=true, sample_size=100000, all_varchar=true)`;
+    const includeSourceColumn = registered.length > 1;
+    let sourceColumn = includeSourceColumn ? 'Fonte' : null;
+    let suffix = 2;
+    while (sourceColumn && expectedColumns.includes(sourceColumn)) sourceColumn = `Fonte (${suffix++})`;
+    const unions = registered.map(source => {
+      const projections = source.originalColumns.map((original, index) =>
+        `CAST(${quoteId(original)} AS VARCHAR) AS ${quoteId(expectedColumns[index])}`
+      );
+      if (sourceColumn) {
+        projections.push(`${quoteString(source.name || source.file.name)} AS ${quoteId(sourceColumn)}`);
+      }
+      return `SELECT ${projections.join(', ')} FROM ${source.scan}`;
+    });
 
-    onProgress('Detectando colunas e tipos...');
-    await conn.query(`CREATE TABLE dash_source AS SELECT ROW_NUMBER() OVER () AS ${quoteId(ROW_ID)}, * FROM ${scan}`);
+    onProgress('Empilhando tabelas compatíveis...');
+    await conn.query(`CREATE TABLE dash_source AS
+      SELECT ROW_NUMBER() OVER () AS ${quoteId(ROW_ID)}, combined.*
+      FROM (${unions.join(' UNION ALL ')}) AS combined`);
     const schemaRows = arrowToRows(await conn.query('DESCRIBE SELECT * FROM dash_source'));
     const visibleSchemaRows = schemaRows.filter(row => row.column_name !== ROW_ID);
     const originalColumns = visibleSchemaRows.map(row => row.column_name);
@@ -144,6 +182,7 @@ const DataEngine = (() => {
       columnTypes: { ...columnTypes },
       rowCount,
       previewRows: await queryRows('SELECT * FROM dash_data LIMIT 200'),
+      sourceColumn,
     };
   }
 
@@ -522,6 +561,7 @@ const DataEngine = (() => {
 
   return {
     loadFile,
+    loadFiles,
     reset,
     rebuildView,
     count,
