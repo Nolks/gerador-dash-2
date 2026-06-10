@@ -148,6 +148,41 @@ const ExcelParser = (() => {
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
+  function parseTimeValue(value) {
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) return null;
+      return value.getHours() * 3600 + value.getMinutes() * 60 + value.getSeconds();
+    }
+    if (typeof value === 'number' && value >= 0 && value < 1) {
+      return Math.round(value * 86400) % 86400;
+    }
+    const text = String(value ?? '').trim();
+    if (!text) return null;
+    const match = text.match(/^(\d{1,2})(?::|h)(\d{2})(?::(\d{2}))?$/i);
+    if (!match) return null;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    const second = Number(match[3] ?? 0);
+    if (hour > 23 || minute > 59 || second > 59) return null;
+    return hour * 3600 + minute * 60 + second;
+  }
+
+  function formatTimeValue(value, includeSeconds = false) {
+    const total = parseTimeValue(value);
+    if (total === null) return String(value ?? '');
+    const hour = Math.floor(total / 3600);
+    const minute = Math.floor((total % 3600) / 60);
+    const second = total % 60;
+    const base = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    return includeSeconds || second ? `${base}:${String(second).padStart(2, '0')}` : base;
+  }
+
+  function isTimeLike(value) {
+    return typeof value === 'string' &&
+      /^(\d{1,2})(?::|h)(\d{2})(?::(\d{2}))?$/i.test(value.trim()) &&
+      parseTimeValue(value) !== null;
+  }
+
   /** Detecta se a coluna contém valores com formatação BR/currency */
   function hasBRFormatting(rows, col) {
     let found = 0;
@@ -175,14 +210,17 @@ const ExcelParser = (() => {
       if (!sample.length) { types[col] = 'string'; continue; }
       let numericCount = 0;
       let dateCount = 0;
+      let timeCount = 0;
       let identifierCount = 0;
       for (const value of sample) {
         if (parseNumericValue(value) !== null) numericCount++;
         if (isDateLike(value)) dateCount++;
+        if (isTimeLike(value)) timeCount++;
         if (typeof value === 'string' && /^[-+]?0\d+$/.test(value.trim())) identifierCount++;
       }
 
-      if (identifierCount / sample.length >= 0.5) types[col] = 'string';
+      if (identifierCount / sample.length >= 0.5) types[col] = 'identifier';
+      else if (timeCount / sample.length >= 0.7) types[col] = 'time';
       else if (numericCount / sample.length >= 0.8) types[col] = 'number';
       else if (dateCount / sample.length >= 0.7) types[col] = 'date';
       else types[col] = 'string';
@@ -341,7 +379,8 @@ const ExcelParser = (() => {
 
   return {
     readFile, sanitize, normalizeHeaders, detectTypes,
-    normalizeNumericValue, parseNumericValue, parseDateValue, hasBRFormatting, preprocessRows,
+    normalizeNumericValue, parseNumericValue, parseDateValue, parseTimeValue, formatTimeValue,
+    hasBRFormatting, preprocessRows,
     tokenizeFormula, formulaColumns, validateFormula, evaluateFormula,
     numericColumns, stringColumns, fmtNumber,
   };

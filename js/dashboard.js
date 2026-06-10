@@ -204,7 +204,7 @@ const Dashboard = (() => {
       titleIcon: 'auto', column: yCol, kpiAgg: 'sum', prefix: '', suffix: '', decimals: 0,
       valueFormat: 'number', valueDecimals: 0, percentScale: 'direct', currency: 'BRL',
       iconClass: 'fa-gauge-high', targetEnabled: false, targetValue: 0, targetDirection: 'higher',
-      goodColor: '#16a34a', warningColor: '#f59e0b', badColor: '#dc2626',
+      goodColor: '#16a34a', warningColor: '#f59e0b', badColor: '#dc2626', showSummary: true,
     };
     if (type === 'table')   return {
       titleIcon: 'auto', columns: cols.slice(0, 6), rowLimit: 15,
@@ -261,7 +261,7 @@ const Dashboard = (() => {
   function renderWidget(w) {
     const grid = document.getElementById('widgets-grid');
     const el   = document.createElement('div');
-    el.className = `widget sz-${w.size}${w.type === 'button' ? ' widget-button-floating' : ''}`;
+    el.className = `widget widget-${w.type} sz-${w.size}${w.type === 'button' ? ' widget-button-floating' : ''}`;
     el.dataset.id = w.id;
     applyWidgetLayout(w, el);
 
@@ -410,6 +410,8 @@ const Dashboard = (() => {
   function updateSizeButton(widget, element = document.querySelector(`[data-id="${widget.id}"]`)) {
     const button = element?.querySelector('.resize-btn');
     if (!button) return;
+    SIZES.forEach(size => element.classList.remove(`sz-${size}`));
+    element.classList.add(`sz-${widget.size}`);
     button.title = `Tamanho: ${widget.size}`;
     button.dataset.size = widget.size;
     button.querySelector('.size-label').textContent = SIZE_LABELS[widget.size] ?? '½';
@@ -906,13 +908,15 @@ const Dashboard = (() => {
     const selected = App.state.widgetFilters[w.id] ?? {};
     const controls = columns.map((column, index) => {
       const type = App.state.columnConfig[column] ?? App.state.columnTypes[column];
-      if (type === 'date') {
+      if (type === 'date' || type === 'time') {
         const range = selected[column]?.op === 'between' ? selected[column] : {};
+        const inputType = type === 'time' ? 'time' : 'date';
+        const step = type === 'time' ? ' step="1"' : '';
         return `<label class="filter-widget-field filter-date-field" data-filter-column="${escHtml(column)}">
           <span>${escHtml(column)}</span>
           <div class="filter-date-range">
-            <input class="form-control filter-date-from" type="date" value="${escHtml(range.from ?? '')}" onchange="Dashboard.applyFilterDateRange('${w.id}','${escHtml(escJs(column))}',this.closest('.filter-date-field'))">
-            <input class="form-control filter-date-to" type="date" value="${escHtml(range.to ?? '')}" onchange="Dashboard.applyFilterDateRange('${w.id}','${escHtml(escJs(column))}',this.closest('.filter-date-field'))">
+            <input class="form-control filter-date-from" type="${inputType}"${step} value="${escHtml(range.from ?? '')}" onchange="Dashboard.applyFilterDateRange('${w.id}','${escHtml(escJs(column))}',this.closest('.filter-date-field'))">
+            <input class="form-control filter-date-to" type="${inputType}"${step} value="${escHtml(range.to ?? '')}" onchange="Dashboard.applyFilterDateRange('${w.id}','${escHtml(escJs(column))}',this.closest('.filter-date-field'))">
           </div>
         </label>`;
       }
@@ -999,6 +1003,7 @@ const Dashboard = (() => {
       const date = ExcelParser.parseDateValue(value);
       if (date) return date.toLocaleDateString('pt-BR');
     }
+    if (type === 'time') return ExcelParser.formatTimeValue(value, true);
     return String(value ?? '');
   }
 
@@ -1071,7 +1076,7 @@ const Dashboard = (() => {
         <div class="kpi-value">${escHtml(cfg.prefix)}${fmt}${escHtml(suffix)}</div>
         <div class="kpi-label">${escHtml(cfg.column)}</div>
         ${trendHTML}
-        <div class="kpi-sub">${labels[cfg.kpiAgg] ?? ''} · ${current.rows.toLocaleString('pt-BR')} linhas</div>
+        ${cfg.showSummary === false ? '' : `<div class="kpi-sub">${labels[cfg.kpiAgg] ?? ''} · ${current.rows.toLocaleString('pt-BR')} linhas</div>`}
       </div>`;
     const target = kpiTargetHTML(value, cfg);
     const valueElement = body.querySelector('.kpi-value');
@@ -1141,7 +1146,7 @@ const Dashboard = (() => {
         <div class="kpi-value">${escHtml(cfg.prefix)}${fmt}${escHtml(suffix)}</div>
         <div class="kpi-label">${escHtml(cfg.column)}</div>
         ${trendHTML}
-        <div class="kpi-sub">${aggLabels[cfg.kpiAgg] ?? ''} · ${rows.length} linhas</div>
+        ${cfg.showSummary === false ? '' : `<div class="kpi-sub">${aggLabels[cfg.kpiAgg] ?? ''} · ${rows.length.toLocaleString('pt-BR')} linhas</div>`}
       </div>
     `;
     const target = kpiTargetHTML(val, cfg);
@@ -1546,6 +1551,9 @@ const Dashboard = (() => {
               <label class="form-label">Sufixo <em>(ex: %)</em></label>
               <input id="w-suffix" class="form-control" type="text" value="${escHtml(cfg.suffix??'')}" placeholder="%">
             </div>
+            <div class="form-group full">
+              ${toggleRow('w-kpi-show-summary', 'Exibir agregação e quantidade de linhas', cfg.showSummary ?? true)}
+            </div>
           </div>
         </div>
         <div class="form-section">
@@ -1837,6 +1845,7 @@ const Dashboard = (() => {
       w.config.currency = document.getElementById('w-currency')?.value ?? 'BRL';
       w.config.prefix   = document.getElementById('w-prefix')?.value    ?? '';
       w.config.suffix   = document.getElementById('w-suffix')?.value    ?? '';
+      w.config.showSummary = document.getElementById('w-kpi-show-summary')?.checked ?? true;
       w.config.targetEnabled = document.getElementById('w-target-enabled')?.checked ?? false;
       w.config.targetValue = Number(document.getElementById('w-target-value')?.value ?? 0);
       w.config.targetDirection = document.getElementById('w-target-direction')?.value ?? 'higher';

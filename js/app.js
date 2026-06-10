@@ -390,6 +390,12 @@ const App = (() => {
         const to = ExcelParser.parseDateValue(filter.to);
         return current !== null && (!from || current >= from) && (!to || current <= to);
       }
+      if (type === 'time') {
+        const current = ExcelParser.parseTimeValue(raw);
+        const from = ExcelParser.parseTimeValue(filter.from);
+        const to = ExcelParser.parseTimeValue(filter.to);
+        return current !== null && (from === null || current >= from) && (to === null || current <= to);
+      }
       const current = ExcelParser.parseNumericValue(raw);
       const from = ExcelParser.parseNumericValue(filter.from);
       const to = ExcelParser.parseNumericValue(filter.to);
@@ -403,16 +409,19 @@ const App = (() => {
     const expectedNumeric = ExcelParser.parseNumericValue(value);
     const date = type === 'date' ? ExcelParser.parseDateValue(raw) : null;
     const expectedDate = type === 'date' ? ExcelParser.parseDateValue(value) : null;
+    const time = type === 'time' ? ExcelParser.parseTimeValue(raw) : null;
+    const expectedTime = type === 'time' ? ExcelParser.parseTimeValue(value) : null;
     switch (filter.op) {
       case 'contains': return text.includes(expected);
       case 'starts': return text.startsWith(expected);
       case 'equals':
         if (expectedDate) return date !== null && date.getTime() === expectedDate.getTime();
+        if (expectedTime !== null) return time === expectedTime;
         return type === 'number' && expectedNumeric !== null ? numeric === expectedNumeric : text === expected;
-      case 'gt': return expectedDate ? date > expectedDate : numeric !== null && expectedNumeric !== null && numeric > expectedNumeric;
-      case 'gte': return expectedDate ? date >= expectedDate : numeric !== null && expectedNumeric !== null && numeric >= expectedNumeric;
-      case 'lt': return expectedDate ? date < expectedDate : numeric !== null && expectedNumeric !== null && numeric < expectedNumeric;
-      case 'lte': return expectedDate ? date <= expectedDate : numeric !== null && expectedNumeric !== null && numeric <= expectedNumeric;
+      case 'gt': return expectedDate ? date > expectedDate : expectedTime !== null ? time > expectedTime : numeric !== null && expectedNumeric !== null && numeric > expectedNumeric;
+      case 'gte': return expectedDate ? date >= expectedDate : expectedTime !== null ? time >= expectedTime : numeric !== null && expectedNumeric !== null && numeric >= expectedNumeric;
+      case 'lt': return expectedDate ? date < expectedDate : expectedTime !== null ? time < expectedTime : numeric !== null && expectedNumeric !== null && numeric < expectedNumeric;
+      case 'lte': return expectedDate ? date <= expectedDate : expectedTime !== null ? time <= expectedTime : numeric !== null && expectedNumeric !== null && numeric <= expectedNumeric;
       default: return true;
     }
   }
@@ -443,7 +452,9 @@ const App = (() => {
     if (cf && cf.col) {
       const filterValue = String(cf.value ?? '').trim();
       const isDate = (state.columnConfig[cf.col] ?? state.columnTypes[cf.col]) === 'date';
+      const isTime = (state.columnConfig[cf.col] ?? state.columnTypes[cf.col]) === 'time';
       const filterDate = isDate ? ExcelParser.parseDateValue(filterValue) : null;
+      const filterTime = isTime ? ExcelParser.parseTimeValue(filterValue) : null;
       rows = rows.filter(row => {
         const rowValue = String(row[cf.col] ?? '').trim();
         if (filterValue === '(vazio)') return rowValue === '';
@@ -452,6 +463,7 @@ const App = (() => {
           const rowDate = ExcelParser.parseDateValue(row[cf.col]);
           return rowDate !== null && rowDate.getTime() === filterDate.getTime();
         }
+        if (filterTime !== null) return ExcelParser.parseTimeValue(row[cf.col]) === filterTime;
         return rowValue === filterValue;
       });
     }
@@ -519,8 +531,9 @@ const App = (() => {
 
     const isNum = state.numericColumns.includes(col);
     const isDate = (state.columnConfig[col] ?? state.columnTypes[col]) === 'date';
+    const isTime = (state.columnConfig[col] ?? state.columnTypes[col]) === 'time';
     const dateOps = ['equals', 'gt', 'lt', 'gte', 'lte'];
-    opSel.innerHTML = (isNum ? typeOps : isDate ? dateOps : textOps).map(op => {
+    opSel.innerHTML = (isNum ? typeOps : (isDate || isTime) ? dateOps : textOps).map(op => {
       const labels = {
         contains: 'contém', starts: 'começa com', equals: 'igual a',
         gt: 'maior que', lt: 'menor que', gte: '≥', lte: '≤',
@@ -775,6 +788,8 @@ const App = (() => {
           </td>
           <td class="colmap-type">
             <select class="form-control colmap-type-sel" data-col="${escHtml(col)}" onchange="App.onColTypeChange(this)">
+              <option value="identifier" ${cur==='identifier' ?'selected':''}>ID Identificador</option>
+              <option value="time" ${cur==='time' ?'selected':''}>Hora (HH:mm:ss)</option>
               <option value="number"   ${cur==='number'   ?'selected':''}>🔢 Número</option>
               <option value="string"   ${cur==='string'   ?'selected':''}>🔤 Texto</option>
               <option value="date"     ${cur==='date'     ?'selected':''}>📅 Data</option>
@@ -925,9 +940,10 @@ const App = (() => {
     const el = document.getElementById('columns-list');
     el.innerHTML = state.columns.map(c => {
       const t    = state.columnConfig[c] ?? state.columnTypes[c];
-      const cls  = t === 'number' ? 'numeric' : t === 'date' ? 'date' : 'string';
+      const cls  = t === 'number' ? 'numeric' : ['date', 'time'].includes(t) ? 'date' : 'string';
       const icon = t === 'number' ? '#' : t === 'date' ? '📅' : 'A';
-      return `<div class="col-badge ${cls}"><span class="col-icon">${icon}</span>${escHtml(c)}</div>`;
+      const displayIcon = t === 'time' ? 'H' : t === 'identifier' ? 'ID' : icon;
+      return `<div class="col-badge ${cls}"><span class="col-icon">${displayIcon}</span>${escHtml(c)}</div>`;
     }).join('');
   }
 

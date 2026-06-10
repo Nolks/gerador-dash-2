@@ -57,7 +57,8 @@ const DataEngine = (() => {
     if (/TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|DECIMAL|FLOAT|DOUBLE|REAL/.test(t)) {
       return 'number';
     }
-    if (/DATE|TIME|TIMESTAMP|INTERVAL/.test(t)) return 'date';
+    if (/^TIME(?:\s|$|\()/.test(t)) return 'time';
+    if (/DATE|TIMESTAMP|INTERVAL/.test(t)) return 'date';
     return 'string';
   }
 
@@ -195,6 +196,19 @@ const DataEngine = (() => {
     return `${parts[0]}-${parts[1]}-${parts[2]} ${time}`;
   }
 
+  function timeCastExpression(id) {
+    return `TRY_CAST(TRIM(CAST(${id} AS VARCHAR)) AS TIME)`;
+  }
+
+  function timeToSqlTime(value) {
+    const total = ExcelParser.parseTimeValue(value);
+    if (total === null) return null;
+    const hour = String(Math.floor(total / 3600)).padStart(2, '0');
+    const minute = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
+    const second = String(total % 60).padStart(2, '0');
+    return `${hour}:${minute}:${second}`;
+  }
+
   function formulaSql(formula, visibleColumns) {
     ExcelParser.validateFormula(formula, visibleColumns);
     return ExcelParser.tokenizeFormula(formula).map(token => {
@@ -251,6 +265,7 @@ const DataEngine = (() => {
       const numeric = ExcelParser.parseNumericValue(value);
       const type = columnConfig[activeFilter.col] ?? columnTypes[activeFilter.col];
       const dateValue = type === 'date' ? dateToSqlTimestamp(value) : null;
+      const timeValue = type === 'time' ? timeToSqlTime(value) : null;
       switch (activeFilter.op) {
         case 'in': {
           const values = activeFilter.values ?? [];
@@ -264,14 +279,23 @@ const DataEngine = (() => {
           break;
         }
         case 'between': {
-          const from = type === 'date' ? dateToSqlTimestamp(activeFilter.from) : ExcelParser.parseNumericValue(activeFilter.from);
-          const to = type === 'date' ? dateToSqlTimestamp(activeFilter.to) : ExcelParser.parseNumericValue(activeFilter.to);
-          const expression = type === 'date' ? dateCastExpression(col) : `TRY_CAST(${col} AS DOUBLE)`;
+          const from = type === 'date'
+            ? dateToSqlTimestamp(activeFilter.from)
+            : type === 'time' ? timeToSqlTime(activeFilter.from) : ExcelParser.parseNumericValue(activeFilter.from);
+          const to = type === 'date'
+            ? dateToSqlTimestamp(activeFilter.to)
+            : type === 'time' ? timeToSqlTime(activeFilter.to) : ExcelParser.parseNumericValue(activeFilter.to);
+          const expression = type === 'date'
+            ? dateCastExpression(col)
+            : type === 'time' ? timeCastExpression(col) : `TRY_CAST(${col} AS DOUBLE)`;
+          const literal = item => type === 'date'
+            ? `TIMESTAMP ${quoteString(item)}`
+            : type === 'time' ? `TIME ${quoteString(item)}` : item;
           if (from !== null && from !== '') {
-            clauses.push(`${expression} >= ${type === 'date' ? `TIMESTAMP ${quoteString(from)}` : from}`);
+            clauses.push(`${expression} >= ${literal(from)}`);
           }
           if (to !== null && to !== '') {
-            clauses.push(`${expression} <= ${type === 'date' ? `TIMESTAMP ${quoteString(to)}` : to}`);
+            clauses.push(`${expression} <= ${literal(to)}`);
           }
           break;
         }
@@ -284,6 +308,8 @@ const DataEngine = (() => {
         case 'equals':
           if (type === 'date' && dateValue) {
             clauses.push(`${dateCastExpression(col)} = TIMESTAMP ${quoteString(dateValue)}`);
+          } else if (type === 'time' && timeValue) {
+            clauses.push(`${timeCastExpression(col)} = TIME ${quoteString(timeValue)}`);
           } else if (type === 'number' && numeric !== null) {
             clauses.push(`${col} = ${numeric}`);
           } else {
@@ -297,6 +323,11 @@ const DataEngine = (() => {
           if (type === 'date' && dateValue) {
             const operators = { gt: '>', gte: '>=', lt: '<', lte: '<=' };
             clauses.push(`${dateCastExpression(col)} ${operators[activeFilter.op]} TIMESTAMP ${quoteString(dateValue)}`);
+            break;
+          }
+          if (type === 'time' && timeValue) {
+            const operators = { gt: '>', gte: '>=', lt: '<', lte: '<=' };
+            clauses.push(`${timeCastExpression(col)} ${operators[activeFilter.op]} TIME ${quoteString(timeValue)}`);
             break;
           }
           if (numeric === null) break;
@@ -314,12 +345,15 @@ const DataEngine = (() => {
       const value = String(crossFilter.value ?? '').trim();
       const type = columnConfig[crossFilter.col] ?? columnTypes[crossFilter.col];
       const dateValue = type === 'date' ? dateToSqlTimestamp(value) : null;
+      const timeValue = type === 'time' ? timeToSqlTime(value) : null;
       if (value === '(vazio)') {
         clauses.push(`(${col} IS NULL OR TRIM(CAST(${col} AS VARCHAR)) = '')`);
       } else if (value === '(data inválida)' && type === 'date') {
         clauses.push(`TRIM(CAST(${col} AS VARCHAR)) <> '' AND ${dateCastExpression(col)} IS NULL`);
       } else if (dateValue) {
         clauses.push(`${dateCastExpression(col)} = TIMESTAMP ${quoteString(dateValue)}`);
+      } else if (timeValue) {
+        clauses.push(`${timeCastExpression(col)} = TIME ${quoteString(timeValue)}`);
       } else {
         clauses.push(`TRIM(CAST(${col} AS VARCHAR)) = ${quoteString(value)}`);
       }
