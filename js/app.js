@@ -1482,6 +1482,11 @@ const App = (() => {
     return DataEngine.scatter(config, getActiveFilters(), state.crossFilter);
   }
 
+  async function queryExportRows(limit) {
+    if (state.dataMode === 'query') return DataEngine.exportRows(limit);
+    return state.rows.slice(0, limit);
+  }
+
   return {
     state,
     init,
@@ -1490,7 +1495,7 @@ const App = (() => {
     goToDashboard,
     switchSheet,
     getRows,
-    getFilteredCount, queryAggregate, queryKPI, queryTable, queryScatter, getDistinctValues,
+    getFilteredCount, queryAggregate, queryKPI, queryTable, queryScatter, queryExportRows, getDistinctValues,
     setCrossFilter, setDrillThroughFilter, clearCrossFilter,
     setWidgetFilter, toggleWidgetFilterValue, setWidgetRangeFilter, clearWidgetFilters, removeWidgetFilters,
     toggleFilterBar, onFilterColChange, applyFilter, clearFilter,

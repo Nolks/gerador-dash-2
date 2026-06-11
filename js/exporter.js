@@ -456,6 +456,115 @@ const Exporter = (() => {
   }
 
   /* ── JSON (configuração do dashboard) ────── */
+  async function toInteractiveHTML() {
+    App.closeExportMenu();
+    const pwd = await askPassword(
+      'Exportar como HTML interativo',
+      'Filtros, gráficos, KPIs, tabelas e páginas continuarão funcionando no arquivo exportado.'
+    );
+    if (pwd === null) return;
+
+    const MAX_HTML_ROWS = 100000;
+    App.toast('Preparando dados do HTML interativo…', 'info');
+    try {
+      const rows = await App.queryExportRows(MAX_HTML_ROWS);
+      const dashboard = Dashboard.serialize();
+      const title = dashboard.title || 'Dashboard';
+      const primary = Charts.getAllThemes()[Charts.getTheme()]?.swatch ?? '#6366f1';
+      const canvas = document.getElementById('dash-canvas');
+      const background = getComputedStyle(canvas).backgroundColor || '#f1f5f9';
+      const pages = Array.isArray(dashboard.pages) && dashboard.pages.length
+        ? dashboard.pages
+        : [{ id: 'page_1', name: 'Página 1', icon: 'fa-chart-pie', widgets: dashboard.widgets || [] }];
+      const payload = {
+        title,
+        primary,
+        background,
+        pages,
+        activePage: dashboard.activePage || 0,
+        rows,
+        columns: App.state.columns,
+        columnTypes: App.state.columnTypes,
+        columnConfig: App.state.columnConfig,
+        widgetFilters: App.state.widgetFilters,
+        crossFilter: App.state.crossFilter,
+        totalRows: App.state.rowCount,
+        truncated: App.state.rowCount > rows.length,
+      };
+      const payloadJson = JSON.stringify(payload)
+        .replace(/</g, '\\u003c')
+        .replace(/\u2028/g, '\\u2028')
+        .replace(/\u2029/g, '\\u2029');
+      const pwdHash = pwd ? await sha256hex(pwd) : '';
+      const dateStr = new Date().toLocaleDateString('pt-BR', { dateStyle: 'long' });
+      const lockScreen = pwd ? `
+        <div id="lock" style="position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:linear-gradient(135deg,#0f172a,#1e1b4b);font-family:'Segoe UI',system-ui,sans-serif">
+          <div style="font-size:52px">🔒</div>
+          <h2 style="margin:0;color:#fff">${escapeHtmlStr(title)}</h2>
+          <input id="pin" type="password" placeholder="Digite a senha" style="width:300px;padding:13px 16px;border:2px solid #334155;border-radius:10px;background:#1e293b;color:#fff;text-align:center;outline:none">
+          <button onclick="unlock()" style="padding:12px 35px;border:0;border-radius:10px;background:${primary};color:#fff;font-weight:700;cursor:pointer">Entrar</button>
+          <span id="err" style="min-height:18px;color:#ef4444;font-size:12px"></span>
+        </div>` : '';
+      const unlockScript = pwd ? `
+        <script>
+          async function unlock(){
+            const value=document.getElementById('pin').value;
+            const buffer=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));
+            const hash=Array.from(new Uint8Array(buffer)).map(byte=>byte.toString(16).padStart(2,'0')).join('');
+            if(hash==='${pwdHash}'){
+              document.getElementById('lock').remove();
+              document.getElementById('dash').style.visibility='visible';
+            }else{
+              document.getElementById('err').textContent='Senha incorreta.';
+              document.getElementById('pin').value='';
+            }
+          }
+          document.getElementById('pin').addEventListener('keydown',event=>{if(event.key==='Enter')unlock()});
+        <\/script>` : '';
+      const warning = payload.truncated
+        ? `<div class="x-warning"><strong>Atenção:</strong> o arquivo contém as primeiras ${rows.length.toLocaleString('pt-BR')} de ${App.state.rowCount.toLocaleString('pt-BR')} linhas. Os filtros atuam sobre os dados incorporados.</div>`
+        : '';
+      const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>${escapeHtmlStr(title)} — Aebes DashGen</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <style>:root{--primary:${primary}}${HTMLExportRuntime.styles()}</style>
+</head>
+<body style="background:${background}">
+  ${lockScreen}
+  <div id="dash" style="visibility:${pwd ? 'hidden' : 'visible'}">
+    <div class="x-top">
+      <div class="x-brand"><small>Aebes DashGen</small><strong>${escapeHtmlStr(title)}</strong></div>
+      <div class="x-meta"><span id="x-count"></span> · Exportado em ${dateStr}</div>
+    </div>
+    <nav id="x-pages" class="x-pages"></nav>
+    ${warning}
+    <main class="x-main"><div id="x-grid" class="x-grid"></div></main>
+    <footer>Dashboard interativo gerado por <strong>Aebes DashGen</strong></footer>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"><\/script>
+  <script>${HTMLExportRuntime.source()}(${payloadJson});<\/script>
+  ${unlockScript}
+</body>
+</html>`;
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = slugify(title) + '.html';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+      App.toast(payload.truncated
+        ? 'HTML interativo exportado com limite de 100 mil linhas.'
+        : 'HTML interativo exportado!', 'success');
+    } catch (error) {
+      console.error(error);
+      App.toast('Erro ao gerar HTML interativo: ' + error.message, 'error');
+    }
+  }
+
   function toJSON() {
     App.closeExportMenu();
     const data = Dashboard.serialize();
@@ -520,5 +629,5 @@ const Exporter = (() => {
     inp.click();
   }
 
-  return { toPNG, toPDF, toHTML, toJSON, importJSON };
+  return { toPNG, toPDF, toHTML: toInteractiveHTML, toJSON, importJSON };
 })();

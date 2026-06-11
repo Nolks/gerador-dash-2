@@ -551,6 +551,18 @@ const DataEngine = (() => {
     `);
   }
 
+  async function exportRows(limit = 100000) {
+    const safeLimit = safeInt(limit, 100000, 500000);
+    const selected = columns.filter(column => column !== ROW_ID);
+    if (!selected.length) return [];
+    return queryRows(`
+      SELECT ${selected.map(quoteId).join(', ')}
+      FROM dash_data
+      ORDER BY ${quoteId(ROW_ID)}
+      LIMIT ${safeLimit}
+    `);
+  }
+
   function isActive() {
     return active;
   }
@@ -569,6 +581,7 @@ const DataEngine = (() => {
     kpi,
     table,
     scatter,
+    exportRows,
     distinct,
     isActive,
     getRowCount,
