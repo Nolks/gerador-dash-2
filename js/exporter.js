@@ -63,7 +63,7 @@ const Exporter = (() => {
     context.drawImage(logo, logoX, logoY, logoSize, logoSize);
     context.fillStyle = '#94a3b8';
     context.font = `600 ${10 * scale}px Segoe UI, sans-serif`;
-    context.fillText('AEBES DASHGEN', 84 * scale, 29 * scale);
+    context.fillText('AEBES BI STUDIO', 84 * scale, 29 * scale);
     context.fillStyle = '#ffffff';
     context.font = `700 ${18 * scale}px Segoe UI, sans-serif`;
     context.fillText(String(title || 'Dashboard'), 84 * scale, 51 * scale);
@@ -223,7 +223,7 @@ const Exporter = (() => {
         pdf.setTextColor(255, 255, 255);
         pdf.setFontSize(11);
         pdf.setFont('helvetica', 'bold');
-        pdf.text('Aebes DashGen  ·  ' + title, PAD + 31, 21);
+        pdf.text('Aebes BI Studio  ·  ' + title, PAD + 31, 21);
         pdf.setFontSize(8);
         pdf.setFont('helvetica', 'normal');
         pdf.text(dateStr, PW - PAD, 21, { align: 'right' });
@@ -235,7 +235,7 @@ const Exporter = (() => {
         pdf.setTextColor(160, 160, 160);
         pdf.setFontSize(7);
         pdf.text(
-          pwd ? '🔒 Documento protegido por senha  ·  Aebes DashGen' : 'Aebes DashGen',
+          pwd ? '🔒 Documento protegido por senha  ·  Aebes BI Studio' : 'Aebes BI Studio',
           PW / 2, PH - 4, { align: 'center' }
         );
         pdf.setTextColor(180, 180, 180);
@@ -420,7 +420,7 @@ const Exporter = (() => {
     gap:18px;font-family:'Segoe UI',system-ui,sans-serif;z-index:9999;">
     <div style="font-size:56px;filter:drop-shadow(0 0 20px ${primary}80);">🔒</div>
     <h2 style="color:#fff;font-size:22px;margin:0;font-weight:800;">${escapeHtmlStr(title)}</h2>
-    <p style="color:#64748b;font-size:13px;margin:0;letter-spacing:.5px;">AEBES DASHGEN · ACESSO RESTRITO</p>
+    <p style="color:#64748b;font-size:13px;margin:0;letter-spacing:.5px;">AEBES BI STUDIO · ACESSO RESTRITO</p>
     <input id="pin" type="password" placeholder="Digite a senha de acesso"
       style="padding:14px 20px;border-radius:12px;border:2px solid #334155;
              background:#1e293b;color:#fff;font-size:15px;width:300px;
@@ -464,7 +464,7 @@ const Exporter = (() => {
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>${escapeHtmlStr(title)} — Aebes DashGen</title>
+  <title>${escapeHtmlStr(title)} — Aebes BI Studio</title>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;min-height:100vh;}
@@ -486,7 +486,7 @@ const Exporter = (() => {
       <div class="brand">
         <div style="font-size:28px;">📊</div>
         <div>
-          <div class="brand-sub">Aebes DashGen</div>
+          <div class="brand-sub">Aebes BI Studio</div>
           <div class="brand-title">${escapeHtmlStr(title)}</div>
         </div>
       </div>
@@ -496,7 +496,7 @@ const Exporter = (() => {
       <img src="${imgB64}" alt="${escapeHtmlStr(title)}"/>
     </main>
     <footer>
-      Gerado por <strong>Aebes DashGen</strong> &nbsp;·&nbsp; Uso exclusivo do destinatário.
+      Gerado por <strong>Aebes BI Studio</strong> &nbsp;·&nbsp; Uso exclusivo do destinatário.
     </footer>
   </div>
   ${unlockScript}
@@ -590,7 +590,7 @@ const Exporter = (() => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>${escapeHtmlStr(title)} — Aebes DashGen</title>
+  <title>${escapeHtmlStr(title)} — Aebes BI Studio</title>
   <link rel="icon" href="${brandLogo}">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
   <style>:root{--primary:${primary}}${HTMLExportRuntime.styles()}</style>
@@ -599,13 +599,13 @@ const Exporter = (() => {
   ${lockScreen}
   <div id="dash" style="visibility:${pwd ? 'hidden' : 'visible'}">
     <div class="x-top">
-      <div class="x-brand"><img src="${brandLogo}" alt="Logo AEBES"><div><small>Aebes DashGen</small><strong>${escapeHtmlStr(title)}</strong></div></div>
+      <div class="x-brand"><img src="${brandLogo}" alt="Logo AEBES"><div><small>Aebes BI Studio</small><strong>${escapeHtmlStr(title)}</strong></div></div>
       <div class="x-meta"><span id="x-count"></span> · Exportado em ${dateStr}</div>
     </div>
     <nav id="x-pages" class="x-pages"></nav>
     ${warning}
     <main class="x-main"><div id="x-grid" class="x-grid"></div></main>
-    <footer>Dashboard interativo gerado por <strong>Aebes DashGen</strong></footer>
+    <footer>Dashboard interativo gerado por <strong>Aebes BI Studio</strong></footer>
   </div>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"><\/script>
   <script>${HTMLExportRuntime.source()}(${payloadJson});<\/script>

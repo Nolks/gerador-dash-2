@@ -2,6 +2,8 @@
    app.js — Controlador principal
 ───────────────────────────────────────────── */
 const App = (() => {
+  const STORAGE_KEY = 'aebes_bi_studio_saves';
+  const LEGACY_STORAGE_KEY = 'dashgen_saves';
 
   /* ── Estado global ───────────────────────── */
   const state = {
@@ -1343,7 +1345,7 @@ const App = (() => {
   /* ── Gestão de armazenamento ─────────────── */
   function getStorageStats() {
     try {
-      const raw = localStorage.getItem('dashgen_saves') ?? '{}';
+      const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY) ?? '{}';
       const usedBytes = new Blob([raw]).size;
       const maxBytes  = 5 * 1024 * 1024;
       return {
@@ -1355,7 +1357,17 @@ const App = (() => {
   }
 
   function getSaves() {
-    try { return JSON.parse(localStorage.getItem('dashgen_saves') ?? '{}'); } catch { return {}; }
+    try {
+      const current = localStorage.getItem(STORAGE_KEY);
+      if (current) return JSON.parse(current);
+      const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+      if (!legacy) return {};
+      const saves = JSON.parse(legacy);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(saves));
+      return saves;
+    } catch {
+      return {};
+    }
   }
 
   function saveDashboard() {
@@ -1364,7 +1376,7 @@ const App = (() => {
     const saves = getSaves();
     saves[id]   = { ...data, savedAt: new Date().toISOString() };
     try {
-      localStorage.setItem('dashgen_saves', JSON.stringify(saves));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(saves));
       loadSavedList();
       toast('Dashboard salvo!', 'success');
     } catch (e) {
@@ -1433,7 +1445,7 @@ const App = (() => {
     if (!confirm(`Deletar "${key}"?`)) return;
     const saves = getSaves();
     delete saves[key];
-    localStorage.setItem('dashgen_saves', JSON.stringify(saves));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(saves));
     loadSavedList();
     toast('Dashboard deletado.');
   }

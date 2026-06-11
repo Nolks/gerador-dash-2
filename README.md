@@ -1,8 +1,8 @@
-# Aebes DashGen — Gerador de Dashboards
+# Aebes BI Studio — Business Intelligence
 
 > Transforme arquivos Excel, CSV e Parquet em dashboards interativos diretamente no navegador.
 
-O Aebes DashGen é uma aplicação 100% client-side para importar dados, criar páginas de dashboard, configurar gráficos e indicadores e exportar o resultado sem enviar os arquivos para um servidor.
+O Aebes BI Studio é uma aplicação 100% client-side para importar dados, criar páginas de dashboard, configurar gráficos e indicadores e exportar o resultado sem enviar os arquivos para um servidor.
 
 ## Como usar
 
