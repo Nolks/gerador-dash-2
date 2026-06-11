@@ -65,10 +65,14 @@ img { max-width: 100%; }
 /* ═══════════════════════════════════════════════
    LOGO
 ═══════════════════════════════════════════════ */
-.logo { display: flex; align-items: center; gap: 10px; font-size: 26px; font-weight: 800; color: #fff; justify-content: center; margin-bottom: 20px; }
-.logo i { color: var(--c-primary); filter: drop-shadow(0 0 12px #6366f180); }
+.brand-logo { display: block; object-fit: contain; flex: 0 0 auto; }
+.brand-logo-hero { width: 86px; height: 86px; filter: drop-shadow(0 8px 18px rgba(0,0,0,.24)); }
+.brand-logo-header { width: 34px; height: 34px; }
+.brand-logo-preview { width: 32px; height: 32px; }
+.logo { display: flex; align-items: center; gap: 14px; font-size: 26px; font-weight: 800; color: #fff; justify-content: center; margin-bottom: 20px; }
 .logo-sm { display: flex; align-items: center; gap: 7px; font-size: 17px; font-weight: 700; color: var(--c-text); white-space: nowrap; }
-.logo-sm i { color: var(--c-primary); }
+.pwd-brand { width: 72px; height: 72px; display: flex; align-items: center; justify-content: center; }
+.pwd-brand img { width: 68px; height: 68px; object-fit: contain; }
 
 /* ═══════════════════════════════════════════════
    UPLOAD SCREEN
@@ -1258,6 +1262,11 @@ select.form-control { cursor: pointer; }
    RESPONSIVE
 ═══════════════════════════════════════════════ */
 @media (max-width: 768px) {
+  .brand-logo-hero { width: 68px; height: 68px; }
+  .brand-logo-header { width: 30px; height: 30px; }
+  .brand-logo-preview { display: none; }
+  .logo { font-size: 22px; }
+  .logo-sm span { display: none; }
   .upload-hero h1 { font-size: 24px; }
   .dash-sidebar { display: none; }
   .form-grid { grid-template-columns: 1fr; }

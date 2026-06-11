@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Aebes DashGen — Gerador de Dashboards</title>
+  <link rel="icon" type="image/svg+xml" href="image/aebes-logo.svg" />
   <link rel="stylesheet" href="css/style.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
 </head>
@@ -16,7 +17,7 @@
   <div class="upload-hero">
 
     <div class="logo">
-      <i class="fa-solid fa-chart-pie"></i>
+      <img class="brand-logo brand-logo-hero" src="image/aebes-logo.svg" alt="Logo AEBES" />
       <span>Aebes DashGen</span>
     </div>
 
@@ -76,6 +77,7 @@
     <button class="btn btn-ghost" onclick="App.goToUpload()">
       <i class="fa-solid fa-arrow-left"></i> Voltar
     </button>
+    <img class="brand-logo brand-logo-preview" src="image/aebes-logo.svg" alt="Logo AEBES" />
     <div class="file-info-badge">
       <i class="fa-solid fa-file-excel text-green"></i>
       <span id="file-name-display">arquivo.xlsx</span>
@@ -111,7 +113,10 @@
       <button class="btn btn-ghost icon-btn sidebar-toggle" onclick="App.toggleSidebar()" title="Alternar painel">
         <i class="fa-solid fa-bars"></i>
       </button>
-      <div class="logo-sm"><i class="fa-solid fa-chart-pie"></i><span>Aebes DashGen</span></div>
+      <div class="logo-sm">
+        <img class="brand-logo brand-logo-header" src="image/aebes-logo.svg" alt="" />
+        <span>Aebes DashGen</span>
+      </div>
       <input type="text" id="dash-title" class="dash-title-input" value="Meu Dashboard" spellcheck="false" />
     </div>
     <div class="dash-header-right">
@@ -404,9 +409,9 @@
   <button onclick="Dashboard.stopPresentation()" title="Sair"><i class="fa-solid fa-xmark"></i></button>
 </div>
 
-<div class="pwd-overlay" id="pwd-overlay">
+  <div class="pwd-overlay" id="pwd-overlay">
   <div class="pwd-modal">
-    <div class="pwd-icon"><i class="fa-solid fa-lock"></i></div>
+    <div class="pwd-icon pwd-brand"><img src="image/aebes-logo.svg" alt="Logo AEBES" /></div>
     <h3 id="pwd-title">Proteger com senha</h3>
     <p id="pwd-desc">Opcional — deixe em branco para exportar sem proteção.</p>
     <div id="pwd-notice" class="pwd-notice" style="display:none"></div>

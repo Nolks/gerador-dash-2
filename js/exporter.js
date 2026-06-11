@@ -14,6 +14,63 @@ const Exporter = (() => {
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
+  let brandLogoDataUrlCache = '';
+  let brandLogoImageCache = null;
+
+  async function getBrandLogoDataUrl() {
+    if (brandLogoDataUrlCache) return brandLogoDataUrlCache;
+    const response = await fetch('image/aebes-logo.svg');
+    if (!response.ok) throw new Error('Não foi possível carregar a logo AEBES.');
+    const svg = await response.text();
+    brandLogoDataUrlCache = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+    return brandLogoDataUrlCache;
+  }
+
+  async function getBrandLogoImage() {
+    if (brandLogoImageCache) return brandLogoImageCache;
+    const source = await getBrandLogoDataUrl();
+    brandLogoImageCache = await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('Não foi possível renderizar a logo AEBES.'));
+      image.src = source;
+    });
+    return brandLogoImageCache;
+  }
+
+  async function getBrandLogoPng() {
+    const image = await getBrandLogoImage();
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    canvas.getContext('2d').drawImage(image, 0, 0, 256, 256);
+    return canvas.toDataURL('image/png');
+  }
+
+  async function addBrandHeader(canvas, title) {
+    const scale = 2;
+    const headerHeight = 74 * scale;
+    const output = document.createElement('canvas');
+    output.width = canvas.width;
+    output.height = canvas.height + headerHeight;
+    const context = output.getContext('2d');
+    context.fillStyle = '#1e293b';
+    context.fillRect(0, 0, output.width, headerHeight);
+    const logo = await getBrandLogoImage();
+    const logoSize = 52 * scale;
+    const logoX = 20 * scale;
+    const logoY = (headerHeight - logoSize) / 2;
+    context.drawImage(logo, logoX, logoY, logoSize, logoSize);
+    context.fillStyle = '#94a3b8';
+    context.font = `600 ${10 * scale}px Segoe UI, sans-serif`;
+    context.fillText('AEBES DASHGEN', 84 * scale, 29 * scale);
+    context.fillStyle = '#ffffff';
+    context.font = `700 ${18 * scale}px Segoe UI, sans-serif`;
+    context.fillText(String(title || 'Dashboard'), 84 * scale, 51 * scale);
+    context.drawImage(canvas, 0, headerHeight);
+    return output;
+  }
+
   async function captureCanvas() {
     const el = document.getElementById('widgets-grid');
     if (!el.children.length) throw new Error('Nenhum widget para exportar.');
@@ -87,8 +144,9 @@ const Exporter = (() => {
       const canvas  = await captureCanvas();
       const link    = document.createElement('a');
       const title   = document.getElementById('dash-title')?.value ?? 'dashboard';
+      const brandedCanvas = await addBrandHeader(canvas, title);
       link.download = slugify(title) + '.png';
-      link.href     = canvas.toDataURL('image/png');
+      link.href     = brandedCanvas.toDataURL('image/png');
       link.click();
       App.toast('Imagem exportada!', 'success');
     } catch (e) {
@@ -133,6 +191,7 @@ const Exporter = (() => {
       const { jsPDF } = window.jspdf;
       const title     = document.getElementById('dash-title')?.value ?? 'Dashboard';
       const dateStr   = new Date().toLocaleDateString('pt-BR', { dateStyle: 'full' });
+      const brandLogo = await getBrandLogoPng();
 
       const pdfOpts = { orientation: 'landscape', unit: 'pt', format: 'a4' };
       if (pwd) {
@@ -160,10 +219,11 @@ const Exporter = (() => {
         // Cabeçalho
         pdf.setFillColor(30, 41, 59);
         pdf.rect(0, 0, PW, HEADER_H, 'F');
+        pdf.addImage(brandLogo, 'PNG', PAD, 4, 24, 24);
         pdf.setTextColor(255, 255, 255);
         pdf.setFontSize(11);
         pdf.setFont('helvetica', 'bold');
-        pdf.text('Aebes DashGen  ·  ' + title, PAD, 21);
+        pdf.text('Aebes DashGen  ·  ' + title, PAD + 31, 21);
         pdf.setFontSize(8);
         pdf.setFont('helvetica', 'normal');
         pdf.text(dateStr, PW - PAD, 21, { align: 'right' });
@@ -470,6 +530,7 @@ const Exporter = (() => {
       const rows = await App.queryExportRows(MAX_HTML_ROWS);
       const dashboard = Dashboard.serialize();
       const title = dashboard.title || 'Dashboard';
+      const brandLogo = await getBrandLogoDataUrl();
       const primary = Charts.getAllThemes()[Charts.getTheme()]?.swatch ?? '#6366f1';
       const canvas = document.getElementById('dash-canvas');
       const background = getComputedStyle(canvas).backgroundColor || '#f1f5f9';
@@ -499,7 +560,7 @@ const Exporter = (() => {
       const dateStr = new Date().toLocaleDateString('pt-BR', { dateStyle: 'long' });
       const lockScreen = pwd ? `
         <div id="lock" style="position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:linear-gradient(135deg,#0f172a,#1e1b4b);font-family:'Segoe UI',system-ui,sans-serif">
-          <div style="font-size:52px">🔒</div>
+          <img src="${brandLogo}" alt="Logo AEBES" style="width:108px;height:108px;object-fit:contain;filter:drop-shadow(0 10px 24px rgba(0,0,0,.3))">
           <h2 style="margin:0;color:#fff">${escapeHtmlStr(title)}</h2>
           <input id="pin" type="password" placeholder="Digite a senha" style="width:300px;padding:13px 16px;border:2px solid #334155;border-radius:10px;background:#1e293b;color:#fff;text-align:center;outline:none">
           <button onclick="unlock()" style="padding:12px 35px;border:0;border-radius:10px;background:${primary};color:#fff;font-weight:700;cursor:pointer">Entrar</button>
@@ -530,6 +591,7 @@ const Exporter = (() => {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>${escapeHtmlStr(title)} — Aebes DashGen</title>
+  <link rel="icon" href="${brandLogo}">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
   <style>:root{--primary:${primary}}${HTMLExportRuntime.styles()}</style>
 </head>
@@ -537,7 +599,7 @@ const Exporter = (() => {
   ${lockScreen}
   <div id="dash" style="visibility:${pwd ? 'hidden' : 'visible'}">
     <div class="x-top">
-      <div class="x-brand"><small>Aebes DashGen</small><strong>${escapeHtmlStr(title)}</strong></div>
+      <div class="x-brand"><img src="${brandLogo}" alt="Logo AEBES"><div><small>Aebes DashGen</small><strong>${escapeHtmlStr(title)}</strong></div></div>
       <div class="x-meta"><span id="x-count"></span> · Exportado em ${dateStr}</div>
     </div>
     <nav id="x-pages" class="x-pages"></nav>

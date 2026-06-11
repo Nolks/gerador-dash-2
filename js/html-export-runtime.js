@@ -448,7 +448,7 @@ const HTMLExportRuntime = (() => {
     return `
       *{box-sizing:border-box}body{margin:0;font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#1e293b}
       .x-top{background:#1e293b;color:#fff;padding:14px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px}
-      .x-brand small{display:block;color:#94a3b8;text-transform:uppercase;letter-spacing:1px}.x-brand strong{font-size:18px}
+      .x-brand{display:flex;align-items:center;gap:10px}.x-brand img{width:36px;height:36px;object-fit:contain}.x-brand small{display:block;color:#94a3b8;text-transform:uppercase;letter-spacing:1px}.x-brand strong{display:block;font-size:18px}
       .x-meta{font-size:12px;color:#cbd5e1}.x-pages{display:flex;gap:6px;padding:8px 20px;background:#fff;border-bottom:1px solid #e2e8f0;overflow:auto}
       .x-pages button{display:flex;align-items:center;gap:7px;padding:8px 13px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;color:#64748b;cursor:pointer}
       .x-pages button.active{color:#fff;background:var(--primary);border-color:var(--primary)}.x-warning{padding:9px 20px;color:#92400e;background:#fef3c7;font-size:12px}
